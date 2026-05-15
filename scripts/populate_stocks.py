@@ -13,6 +13,9 @@ import json
 import sys
 from pathlib import Path
 
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BACKEND = REPO_ROOT / "backend"
 if str(BACKEND) not in sys.path:
