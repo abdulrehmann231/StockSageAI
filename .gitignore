@@ -1,0 +1,70 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+
+# ===== Node / Next.js =====
+node_modules/
+.next/
+out/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+.pnp.*
+.yarn/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ===== Env / Secrets =====
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+*.pem
+*.key
+
+# ===== IDE / OS =====
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ===== Project-specific =====
+# Local data dumps
+data/
+logs/
+*.log
+
+# Scraped artifacts (filings PDFs etc.)
+artifacts/
+filings/
+*.pdf
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Docker volumes
+postgres-data/
+redis-data/
+
+# Claude Code / agent metadata
+.claude/
