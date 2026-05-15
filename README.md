@@ -52,5 +52,19 @@ npm run dev
 ## Build Status
 Tracked in `plan.md` § 10 (Phased Build Plan). Each phase ships on its own feature branch.
 
+## Notes
+
+### Migrations
+For local dev the backend auto-creates tables via SQLAlchemy `Base.metadata.create_all`
+on startup. **Before production deploy, switch to Alembic-managed migrations** —
+`alembic` is already pinned in `requirements.txt`. Initialize with
+`alembic init alembic`, then generate revisions with
+`alembic revision --autogenerate -m "..."`.
+
+### Tests
+The backend test suite reads `backend/.env.test`. Create the test database once with
+`psql -U postgres -c "CREATE DATABASE stocksage_test OWNER stocksage;"` and run
+`pytest` from `backend/`.
+
 ## License
 TBD

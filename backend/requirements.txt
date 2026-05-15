@@ -4,18 +4,24 @@ uvicorn[standard]==0.32.0
 python-multipart==0.0.12
 
 # --- Config / validation ---
-pydantic==2.9.2
+pydantic[email]==2.9.2
 pydantic-settings==2.5.2
+email-validator==2.2.0
 python-dotenv==1.0.1
 
 # --- Database ---
 sqlalchemy==2.0.35
+greenlet>=3.0.0  # required by SQLAlchemy async
 psycopg[binary]==3.2.3
 alembic==1.13.3
 
 # --- Auth ---
 python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+passlib==1.7.4
+bcrypt==4.0.1  # 4.1+ breaks passlib's version introspection
+
+# --- Rate limiting ---
+slowapi==0.1.9
 
 # --- Cache / Queue ---
 redis==5.1.1
