@@ -22,18 +22,26 @@ async def list_stocks(
     return [StockOut.model_validate(r) for r in rows]
 
 
+def _escape_like(value: str) -> str:
+    """Escape LIKE wildcards so user input can't broaden the match."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @router.get("/search", response_model=list[StockOut])
 async def search_stocks(
     db: DbSession,
     q: str = Query(..., min_length=1, max_length=64),
     limit: int = Query(20, le=50),
 ) -> list[StockOut]:
-    pattern = f"%{q.lower()}%"
+    pattern = f"%{_escape_like(q.lower())}%"
     stmt = (
         select(Stock)
         .where(
             Stock.is_active.is_(True),
-            or_(Stock.ticker.ilike(pattern), Stock.name.ilike(pattern)),
+            or_(
+                Stock.ticker.ilike(pattern, escape="\\"),
+                Stock.name.ilike(pattern, escape="\\"),
+            ),
         )
         .order_by(Stock.ticker)
         .limit(limit)

@@ -1,33 +1,26 @@
 """Shared pytest fixtures.
 
-Sets DATABASE_URL to the test DB before any backend module is imported,
-creates tables once per session, and truncates user/stock rows between tests.
+Loads backend/.env.test into the environment before any backend module
+imports, creates the schema once per session, and truncates user/stock
+rows between tests.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-# Point backend imports to the project root and the test database before
-# the application loads its settings.
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
-os.environ["DATABASE_URL"] = (
-    "postgresql+psycopg://stocksage:stocksage@localhost:5432/stocksage_test"
-)
-os.environ["REDIS_URL"] = "redis://localhost:6379/15"
-os.environ["JWT_SECRET"] = "test-secret-not-used-anywhere-else"
-os.environ["JWT_ALGORITHM"] = "HS256"
-os.environ["JWT_EXPIRE_MINUTES"] = "60"
-os.environ["CORS_ORIGINS"] = "http://localhost:3000"
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(BACKEND_DIR / ".env.test", override=True)
 
 import pytest_asyncio  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
@@ -58,6 +51,16 @@ async def clean_tables():
         await session.execute(text("TRUNCATE TABLE users, stocks RESTART IDENTITY CASCADE"))
         await session.commit()
     yield
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def reset_rate_limiter():
+    """Clear slowapi state between tests so per-IP counts don't bleed."""
+    from core.limiter import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()
 
 
 @pytest_asyncio.fixture

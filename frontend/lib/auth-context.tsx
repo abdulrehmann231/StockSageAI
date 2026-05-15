@@ -1,5 +1,6 @@
 "use client";
 
+import { AxiosError } from "axios";
 import { useRouter } from "next/navigation";
 import {
   createContext,
@@ -10,7 +11,7 @@ import {
   useState,
 } from "react";
 
-import { api, clearToken, getToken, setToken } from "@/lib/api";
+import { api } from "@/lib/api";
 import type { AuthResponse, Market, RiskProfile, User } from "@/lib/types";
 
 interface AuthContextValue {
@@ -18,7 +19,7 @@ interface AuthContextValue {
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (data: SignupData) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 export interface SignupData {
@@ -37,16 +38,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      setLoading(false);
-      return;
-    }
+    let cancelled = false;
     api
       .get<User>("/api/auth/me")
-      .then(({ data }) => setUser(data))
-      .catch(() => clearToken())
-      .finally(() => setLoading(false));
+      .then(({ data }) => {
+        if (!cancelled) setUser(data);
+      })
+      .catch((err: unknown) => {
+        // Only treat 401 as "logged out". Network or 5xx errors leave the
+        // session state untouched so a transient outage doesn't sign users out.
+        if (err instanceof AxiosError && err.response?.status === 401) {
+          if (!cancelled) setUser(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const login = useCallback(
@@ -55,7 +65,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email,
         password,
       });
-      setToken(data.access_token);
       setUser(data.user);
       router.push("/dashboard");
     },
@@ -65,15 +74,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signup = useCallback(
     async (payload: SignupData) => {
       const { data } = await api.post<AuthResponse>("/api/auth/signup", payload);
-      setToken(data.access_token);
       setUser(data.user);
       router.push("/dashboard");
     },
     [router]
   );
 
-  const logout = useCallback(() => {
-    clearToken();
+  const logout = useCallback(async () => {
+    try {
+      await api.post("/api/auth/logout");
+    } catch {
+      // Ignore network errors; we still want to clear local state.
+    }
     setUser(null);
     router.push("/login");
   }, [router]);

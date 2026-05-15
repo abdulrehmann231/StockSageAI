@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
 import type { Stock } from "@/lib/types";
@@ -20,7 +20,7 @@ function MarketBadge({ market }: { market: string }) {
   const flag = market === "PSX" ? "🇵🇰" : "🇺🇸";
   return (
     <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-      <span>{flag}</span>
+      <span aria-hidden="true">{flag}</span>
       <span>{market}</span>
     </span>
   );
@@ -28,6 +28,7 @@ function MarketBadge({ market }: { market: string }) {
 
 export function SearchBar() {
   const [query, setQuery] = useState("");
+  const listboxId = useId();
 
   const { data: stocks = [], isLoading } = useQuery({
     queryKey: ["stocks", "list"],
@@ -45,11 +46,21 @@ export function SearchBar() {
     return fuse.search(query).slice(0, 8).map((r) => r.item);
   }, [fuse, query]);
 
+  const dropdownOpen = query.trim().length > 0 && !isLoading;
+
   return (
     <div className="w-full">
+      <label htmlFor={`${listboxId}-input`} className="sr-only">
+        Search stocks
+      </label>
       <div className="relative">
         <input
+          id={`${listboxId}-input`}
           type="text"
+          role="combobox"
+          aria-controls={listboxId}
+          aria-expanded={dropdownOpen}
+          aria-autocomplete="list"
           placeholder={
             isLoading
               ? "Loading stocks..."
@@ -60,11 +71,18 @@ export function SearchBar() {
           disabled={isLoading}
           className="w-full rounded-lg border border-border bg-background px-4 py-3 text-sm shadow-sm outline-none focus:ring-2 focus:ring-foreground disabled:opacity-50"
         />
-        {query && results.length > 0 ? (
-          <ul className="absolute z-10 mt-2 w-full overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+        {dropdownOpen && results.length > 0 ? (
+          <ul
+            id={listboxId}
+            role="listbox"
+            aria-label="Stock search results"
+            className="absolute z-10 mt-2 w-full overflow-hidden rounded-lg border border-border bg-background shadow-lg"
+          >
             {results.map((s) => (
               <li
                 key={s.ticker}
+                role="option"
+                aria-selected="false"
                 className="flex cursor-pointer items-center justify-between px-4 py-2.5 hover:bg-muted"
               >
                 <div className="flex flex-col">
@@ -85,8 +103,13 @@ export function SearchBar() {
             ))}
           </ul>
         ) : null}
-        {query && !isLoading && results.length === 0 ? (
-          <p className="absolute mt-2 w-full rounded-lg border border-border bg-background px-4 py-3 text-sm text-muted-foreground shadow-lg">
+        {dropdownOpen && results.length === 0 ? (
+          <p
+            id={listboxId}
+            role="status"
+            aria-live="polite"
+            className="absolute mt-2 w-full rounded-lg border border-border bg-background px-4 py-3 text-sm text-muted-foreground shadow-lg"
+          >
             No matches for &quot;{query}&quot;.
           </p>
         ) : null}

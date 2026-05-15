@@ -36,6 +36,14 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = "http://localhost:3000"
 
+    # Cookies — set Secure in prod (requires HTTPS)
+    cookie_secure: bool = False
+    cookie_samesite: str = "lax"
+    cookie_name_access: str = "access_token"
+
+    # Rate limits (slowapi syntax: "<count>/<window>")
+    auth_rate_limit: str = "5/minute"
+
     # LLM providers (all optional at scaffold stage)
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None

@@ -80,3 +80,21 @@ async def test_get_stock_is_case_insensitive_on_path(client: AsyncClient, seed_s
 async def test_get_unknown_stock_returns_404(client: AsyncClient, seed_stocks):
     res = await client.get("/api/stocks/NOPE")
     assert res.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_search_escapes_like_wildcards(client: AsyncClient, seed_stocks):
+    """`%` from the user shouldn't broaden the match into a catch-all."""
+    # A bare `%` would match everything if not escaped; we expect zero hits
+    # because no seeded ticker/name literally contains `%`.
+    res = await client.get("/api/stocks/search", params={"q": "%"})
+    assert res.status_code == 200
+    assert res.json() == []
+
+
+@pytest.mark.asyncio
+async def test_search_escapes_underscore_wildcards(client: AsyncClient, seed_stocks):
+    """`_` matches a single char in LIKE; user-supplied `_` must be a literal."""
+    res = await client.get("/api/stocks/search", params={"q": "_"})
+    assert res.status_code == 200
+    assert res.json() == []
