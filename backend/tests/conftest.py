@@ -44,7 +44,7 @@ async def prepare_database():
     await engine.dispose()
 
 
-@pytest_asyncio.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True, loop_scope="function")
 async def clean_tables():
     """Truncate all tables between tests for isolation."""
     async with SessionLocal() as session:
@@ -53,7 +53,7 @@ async def clean_tables():
     yield
 
 
-@pytest_asyncio.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True, loop_scope="function")
 async def reset_rate_limiter():
     """Clear slowapi state between tests so per-IP counts don't bleed."""
     from core.limiter import limiter
@@ -63,14 +63,30 @@ async def reset_rate_limiter():
     limiter.reset()
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(autouse=True, loop_scope="function")
+async def flush_redis():
+    """Flush the test Redis db between tests.
+
+    Resets the cached client so its connection pool binds to the
+    current test's event loop (redis-py async pools are loop-bound).
+    """
+    from services import cache_service
+
+    await cache_service.close()
+    redis = cache_service.get_redis()
+    await redis.flushdb()
+    yield
+    await cache_service.close()
+
+
+@pytest_asyncio.fixture(loop_scope="function")
 async def client():
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="function")
 async def seed_stocks():
     """Seed a handful of stocks for endpoint tests."""
     from db.models import Stock

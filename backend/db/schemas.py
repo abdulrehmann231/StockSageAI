@@ -51,3 +51,33 @@ class StockOut(BaseModel):
     market_cap: Decimal | None
     currency: str | None
     is_active: bool
+
+
+class PriceQuote(BaseModel):
+    """Snapshot of live/last-known pricing data for a single ticker."""
+
+    ticker: str
+    market: str
+    currency: str | None = None
+
+    price: float
+    previous_close: float | None = None
+    open: float | None = None
+    day_high: float | None = None
+    day_low: float | None = None
+    volume: int | None = None
+
+    week_52_high: float | None = None
+    week_52_low: float | None = None
+
+    market_cap: float | None = None
+    pe_ratio: float | None = None
+    eps: float | None = None
+    dividend_yield: float | None = None  # percent, e.g. 2.5 == 2.5%
+
+    change: float | None = None
+    change_pct: float | None = None
+
+    fetched_at: datetime
+    source: str  # "yfinance" | "psx"
+    cached: bool = False

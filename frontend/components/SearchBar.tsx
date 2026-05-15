@@ -2,6 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import Fuse, { type IFuseOptions } from "fuse.js";
+import Link from "next/link";
 import { useId, useMemo, useState } from "react";
 
 import { api } from "@/lib/api";
@@ -79,26 +80,27 @@ export function SearchBar() {
             className="absolute z-10 mt-2 w-full overflow-hidden rounded-lg border border-border bg-background shadow-lg"
           >
             {results.map((s) => (
-              <li
-                key={s.ticker}
-                role="option"
-                aria-selected="false"
-                className="flex cursor-pointer items-center justify-between px-4 py-2.5 hover:bg-muted"
-              >
-                <div className="flex flex-col">
-                  <span className="font-medium">{s.ticker}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {s.name}
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {s.sector ? (
-                    <span className="hidden text-xs text-muted-foreground sm:inline">
-                      {s.sector}
+              <li key={s.ticker} role="option" aria-selected="false">
+                <Link
+                  href={`/dashboard/stocks/${encodeURIComponent(s.ticker)}`}
+                  onClick={() => setQuery("")}
+                  className="flex items-center justify-between px-4 py-2.5 hover:bg-muted"
+                >
+                  <div className="flex flex-col">
+                    <span className="font-medium">{s.ticker}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {s.name}
                     </span>
-                  ) : null}
-                  <MarketBadge market={s.market} />
-                </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {s.sector ? (
+                      <span className="hidden text-xs text-muted-foreground sm:inline">
+                        {s.sector}
+                      </span>
+                    ) : null}
+                    <MarketBadge market={s.market} />
+                  </div>
+                </Link>
               </li>
             ))}
           </ul>

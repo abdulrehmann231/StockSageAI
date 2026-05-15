@@ -25,3 +25,31 @@ export interface Stock {
   currency: string | null;
   is_active: boolean;
 }
+
+export interface PriceQuote {
+  ticker: string;
+  market: string;
+  currency: string | null;
+
+  price: number;
+  previous_close: number | null;
+  open: number | null;
+  day_high: number | null;
+  day_low: number | null;
+  volume: number | null;
+
+  week_52_high: number | null;
+  week_52_low: number | null;
+
+  market_cap: number | null;
+  pe_ratio: number | null;
+  eps: number | null;
+  dividend_yield: number | null;
+
+  change: number | null;
+  change_pct: number | null;
+
+  fetched_at: string;
+  source: string;
+  cached: boolean;
+}
