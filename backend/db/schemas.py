@@ -81,3 +81,24 @@ class PriceQuote(BaseModel):
     fetched_at: datetime
     source: str  # "yfinance" | "psx"
     cached: bool = False
+
+
+# ---------- Pagination ----------
+
+
+class PaginationMeta(BaseModel):
+    """Metadata for paginated responses."""
+
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+    has_next: bool
+    has_prev: bool
+
+
+class PaginatedStocks(BaseModel):
+    """Paginated list of stocks."""
+
+    items: list[StockOut]
+    meta: PaginationMeta
