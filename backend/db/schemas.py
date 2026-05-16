@@ -60,6 +60,7 @@ class PriceQuote(BaseModel):
     market: str
     currency: str | None = None
 
+    # Core price data
     price: float
     previous_close: float | None = None
     open: float | None = None
@@ -67,17 +68,48 @@ class PriceQuote(BaseModel):
     day_low: float | None = None
     volume: int | None = None
 
+    # Range data
     week_52_high: float | None = None
     week_52_low: float | None = None
 
+    # Valuation metrics
     market_cap: float | None = None
     pe_ratio: float | None = None
     eps: float | None = None
     dividend_yield: float | None = None  # percent, e.g. 2.5 == 2.5%
 
+    # Change data
     change: float | None = None
     change_pct: float | None = None
 
+    # Additional PSX data (may be None for global stocks)
+    total_shares: int | None = None
+    free_float_shares: int | None = None
+    free_float_pct: float | None = None
+    net_profit_margin: float | None = None
+
+    # Metadata
     fetched_at: datetime
     source: str  # "yfinance" | "psx"
     cached: bool = False
+
+
+# ---------- Pagination ----------
+
+
+class PaginationMeta(BaseModel):
+    """Metadata for paginated responses."""
+
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+    has_next: bool
+    has_prev: bool
+
+
+class PaginatedStocks(BaseModel):
+    """Paginated list of stocks."""
+
+    items: list[StockOut]
+    meta: PaginationMeta
