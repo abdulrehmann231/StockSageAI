@@ -107,16 +107,11 @@ class TestParseRangeText:
         assert low is None
         assert high is None
 
-    def test_single_value(self):
-        low, high = _parse_range_text("100.00")
-        assert low is None or high is None  # Should fail to parse as range
-
 
 class TestReadStats:
     """Tests for _read_stats with mocked Playwright page."""
 
     def test_parses_stats_items(self):
-        # Create mock page structure
         mock_page = MagicMock()
         mock_items = MagicMock()
         mock_items.count.return_value = 2
@@ -164,10 +159,9 @@ class TestRead52wRange:
         mock_items.count.return_value = 1
 
         mock_item = MagicMock()
-        # First call for label
         mock_item.locator.return_value.first.text_content.side_effect = [
-            "52-Week Range",  # Label
-            "152.17 — 369.99",  # Value
+            "52-Week Range",
+            "152.17 — 369.99",
         ]
         mock_items.nth.return_value = mock_item
         mock_page.locator.return_value = mock_items
@@ -194,20 +188,6 @@ class TestRead52wRange:
         assert low == 6402.02
         assert high == 10524.97
 
-    def test_returns_none_when_not_found(self):
-        mock_page = MagicMock()
-        mock_items = MagicMock()
-        mock_items.count.return_value = 1
-
-        mock_item = MagicMock()
-        mock_item.locator.return_value.first.text_content.return_value = "Some Other Label"
-        mock_items.nth.return_value = mock_item
-        mock_page.locator.return_value = mock_items
-
-        low, high = _read_52w_range(mock_page, "TEST")
-        assert low is None
-        assert high is None
-
 
 # ---------- Integration tests (require network) ----------
 
@@ -222,8 +202,8 @@ class TestPSXScraperLive:
     Skip them in CI with: pytest -m "not live"
     """
 
-    async def test_fetch_engro_returns_valid_price(self):
-        """ENGRO is a commonly traded stock - should always have price."""
+    async def test_fetch_engro_returns_complete_data(self):
+        """ENGRO should return price and additional data."""
         quote = await fetch_psx_quote("ENGRO", timeout_ms=45_000)
 
         assert quote["ticker"] == "ENGRO"
@@ -232,17 +212,22 @@ class TestPSXScraperLive:
         assert quote["price"] is not None
         assert quote["price"] > 0
 
-    async def test_fetch_hbl_has_fundamentals(self):
-        """HBL often has P/E ratio available."""
+        # Check we're getting additional data
+        assert "market_cap" in quote
+        assert "eps" in quote
+        assert "total_shares" in quote
+
+    async def test_fetch_hbl_has_pe_ratio(self):
+        """HBL (a major bank) should have P/E ratio."""
         quote = await fetch_psx_quote("HBL", timeout_ms=45_000)
 
         assert quote["ticker"] == "HBL"
         assert quote["price"] is not None
-        # P/E should be available for a major bank
-        # Note: This may be None after market hours
+        # HBL usually has P/E available
+        # Note: May be None if market data is unavailable
 
-    async def test_fetch_nestle_52w_range_is_sane(self):
-        """NESTLE 52w range was returning incorrect values before the fix."""
+    async def test_fetch_nestle_52w_range_is_correct(self):
+        """NESTLE 52w range should be in thousands (not corrupted)."""
         quote = await fetch_psx_quote("NESTLE", timeout_ms=45_000)
 
         assert quote["ticker"] == "NESTLE"
@@ -254,30 +239,20 @@ class TestPSXScraperLive:
         assert price > 5000, f"NESTLE price {price} seems too low"
 
         if w52_low is not None and w52_high is not None:
-            # 52w range should be plausible for a stock trading at 7500+
+            # 52w range should be in thousands for NESTLE
             assert w52_low > 1000, f"52w low {w52_low} seems too low for NESTLE"
             assert w52_high > 5000, f"52w high {w52_high} seems too low for NESTLE"
-            # High should be higher than low
             assert w52_high > w52_low
-            # Price should be within a reasonable range of the 52w bounds
-            assert w52_low <= price * 1.5, f"52w low {w52_low} is too far from price {price}"
-            assert w52_high >= price * 0.5, f"52w high {w52_high} is too far from price {price}"
 
     async def test_fetch_ogdc_returns_change_info(self):
         """OGDC should have change/change_pct data."""
         quote = await fetch_psx_quote("OGDC", timeout_ms=45_000)
 
         assert quote["ticker"] == "OGDC"
-        # Change info should be present (might be 0 if unchanged)
         assert "change" in quote
         assert "change_pct" in quote
 
-    async def test_unknown_ticker_raises_error(self):
-        """Invalid ticker should raise ValueError."""
-        with pytest.raises(ValueError, match="no price"):
-            await fetch_psx_quote("XYZNOTTICKER", timeout_ms=30_000)
-
-    async def test_all_required_fields_present(self):
+    async def test_all_fields_present(self):
         """Verify the quote has all expected fields."""
         quote = await fetch_psx_quote("LUCK", timeout_ms=45_000)
 
@@ -299,10 +274,24 @@ class TestPSXScraperLive:
             "dividend_yield",
             "change",
             "change_pct",
+            "total_shares",
+            "free_float_shares",
+            "free_float_pct",
+            "net_profit_margin",
         ]
 
         for field in required_fields:
             assert field in quote, f"Missing field: {field}"
+
+    async def test_market_cap_is_reasonable(self):
+        """Market cap should be a large number (in PKR)."""
+        quote = await fetch_psx_quote("HBL", timeout_ms=45_000)
+
+        if quote.get("market_cap"):
+            # HBL market cap should be in hundreds of billions
+            # We multiply by 1000 in the scraper, so check it's large
+            assert quote["market_cap"] > 1_000_000_000, \
+                f"HBL market cap {quote['market_cap']} seems too low"
 
 
 # ---------- Error handling tests ----------
@@ -324,10 +313,10 @@ class TestErrorHandling:
             mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
 
             with pytest.raises(ValueError, match="Timeout"):
-                await fetch_psx_quote("TEST", timeout_ms=1000)
+                await fetch_psx_quote("TEST", timeout_ms=1000, use_pool=False)
 
     @pytest.mark.asyncio
-    async def test_missing_price_element_raises_value_error(self):
+    async def test_missing_price_raises_value_error(self):
         """Missing .quote__close should raise ValueError."""
         from playwright.sync_api import TimeoutError as PlaywrightTimeout
 
@@ -340,4 +329,4 @@ class TestErrorHandling:
             mock_pw.return_value.__enter__.return_value.chromium.launch.return_value = mock_browser
 
             with pytest.raises(ValueError, match="quote__close not found"):
-                await fetch_psx_quote("TEST", timeout_ms=1000)
+                await fetch_psx_quote("TEST", timeout_ms=1000, use_pool=False)

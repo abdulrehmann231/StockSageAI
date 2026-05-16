@@ -1,20 +1,15 @@
 """Playwright-based price scraper for the Pakistan Stock Exchange.
 
 Targets dps.psx.com.pk/company/<TICKER>. The site is JS-rendered so we
-launch headless Chromium, parse the visible quote block, then walk
-``.stats_item`` rows by label.
+launch headless Chromium, parse the visible quote block, and extract
+data from multiple sections (Quote, Equity, Financials, Ratios).
 
-Improvements over initial version:
-- Fixed 52w range parsing for high-priced tickers (handles text fallback)
-- Added market cap, EPS extraction from additional page sections
-- Comprehensive logging for selector failures (early warning for redesigns)
-- Better error messages with ticker context
+Features:
+- Complete data extraction from all available page sections
+- Fixed 52w range parsing for high-priced tickers
+- Market cap, EPS, P/E ratio extraction from Equity/Financials sections
+- Comprehensive logging for selector failures
 - Browser pool support for better performance
-
-Windows note: the project uses ``WindowsSelectorEventLoopPolicy`` for
-psycopg-async, but Playwright's worker-thread loop needs subprocess
-support. We swap to the Proactor policy just for the duration of the
-scrape when not using the pool.
 """
 
 from __future__ import annotations
@@ -47,13 +42,11 @@ def _proactor_loop_policy_on_windows():
 
 
 # Match numbers with optional thousands separators and decimals
-# Order matters: try comma-separated first, then plain numbers
 _FIRST_NUMBER_RE = re.compile(r"-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?")
 
 
 def _to_float(value: str | None) -> float | None:
-    """Extract the first signed number from a string, ignoring currency
-    prefixes (Rs.), thousands commas, and trailing units."""
+    """Extract the first signed number from a string."""
     if value is None:
         return None
     match = _FIRST_NUMBER_RE.search(value)
@@ -72,13 +65,9 @@ def _to_int(value: str | None) -> int | None:
 
 
 def _parse_range_text(text: str) -> tuple[float | None, float | None]:
-    """Parse a range like '152.17 — 369.99' or '6,402.02 — 10,524.97'.
-
-    Returns (low, high) tuple.
-    """
+    """Parse a range like '152.17 — 369.99' or '6,402.02 — 10,524.97'."""
     if not text:
         return None, None
-    # Split on various dash characters
     parts = re.split(r'[—–\-]', text)
     if len(parts) >= 2:
         low = _to_float(parts[0].strip())
@@ -88,18 +77,12 @@ def _parse_range_text(text: str) -> tuple[float | None, float | None]:
 
 
 def _read_stats(page: Page, ticker: str) -> dict[str, str]:
-    """Walk every ``.stats_item`` in the quote block.
-
-    Returns a {label: value_text} map keyed on the lowercased label so
-    callers can look up "open", "high", "p/e ratio (ttm)", etc.
-    """
+    """Walk every .stats_item in the quote block."""
     items = page.locator(".quote__stats .stats_item")
     try:
         count = items.count()
     except Exception as exc:
-        logger.warning(
-            "[%s] Failed to count .stats_item elements: %s", ticker, exc
-        )
+        logger.warning("[%s] Failed to count .stats_item elements: %s", ticker, exc)
         return {}
 
     out: dict[str, str] = {}
@@ -114,20 +97,13 @@ def _read_stats(page: Page, ticker: str) -> dict[str, str]:
         out[label.strip().lower()] = value.strip()
 
     if not out:
-        logger.warning(
-            "[%s] No stats items found - PSX page structure may have changed", ticker
-        )
+        logger.warning("[%s] No stats items found - PSX page structure may have changed", ticker)
 
     return out
 
 
 def _read_52w_range(page: Page, ticker: str) -> tuple[float | None, float | None]:
-    """52-week range - try data attributes first, fall back to text parsing.
-
-    The data-low/data-high attributes on .numRange elements can be unreliable
-    for high-priced tickers (values sometimes appear divided by 10 or 100).
-    We now prefer parsing the visible text as it's always accurate.
-    """
+    """52-week range - parse visible text (most reliable)."""
     items = page.locator(".quote__stats .stats_item")
 
     for i in range(items.count()):
@@ -138,123 +114,170 @@ def _read_52w_range(page: Page, ticker: str) -> tuple[float | None, float | None
             continue
 
         if "52" in label and "week" in label and "range" in label:
-            # First try: parse the visible text (most reliable)
             try:
                 value_text = item.locator(".stats_value").first.text_content(timeout=500)
                 if value_text:
                     low, high = _parse_range_text(value_text)
                     if low is not None and high is not None:
-                        logger.debug(
-                            "[%s] 52w range from text: low=%.2f, high=%.2f",
-                            ticker, low, high
-                        )
+                        logger.debug("[%s] 52w range: low=%.2f, high=%.2f", ticker, low, high)
                         return low, high
             except Exception as exc:
                 logger.debug("[%s] Failed to get 52w range text: %s", ticker, exc)
-
-            # Fallback: try data attributes (may be inaccurate for high-priced stocks)
-            try:
-                numrange = item.locator(".numRange").first
-                low_attr = numrange.get_attribute("data-low", timeout=500)
-                high_attr = numrange.get_attribute("data-high", timeout=500)
-                low = _to_float(low_attr)
-                high = _to_float(high_attr)
-
-                if low is not None and high is not None:
-                    logger.debug(
-                        "[%s] 52w range from data attrs: low=%.2f, high=%.2f",
-                        ticker, low, high
-                    )
-                    return low, high
-            except Exception as exc:
-                logger.debug("[%s] Failed to get 52w range data attrs: %s", ticker, exc)
-
             return None, None
 
     logger.debug("[%s] 52-week range element not found", ticker)
     return None, None
 
 
-def _read_market_cap(page: Page, ticker: str) -> float | None:
-    """Extract market cap from the company info section.
+def _extract_equity_data(page: Page, ticker: str) -> dict[str, Any]:
+    """Extract data from the Equity section (market cap, shares, free float)."""
+    data: dict[str, Any] = {
+        "market_cap": None,
+        "total_shares": None,
+        "free_float_shares": None,
+        "free_float_pct": None,
+    }
 
-    Market cap is displayed in thousands (e.g., "403,164,411.82" means ~403 billion PKR).
-    We return it in raw thousands as displayed.
-    """
     try:
-        # Look for market cap in various possible locations
-        selectors = [
-            "text=Market Cap",
-            "text=Market Capitalization",
-            ".company-info:has-text('Market Cap')",
+        # The equity section contains market cap and share information
+        # Look for specific patterns in the page content
+        page_text = page.content()
+
+        # Market Cap - usually in format "Market Cap: 403,164,411.82"
+        market_cap_patterns = [
+            r'Market\s*Cap[:\s]*(?:Rs\.?\s*)?([0-9,]+\.?\d*)',
+            r'Market\s*Capitalization[:\s]*([0-9,]+\.?\d*)',
         ]
-
-        for selector in selectors:
-            try:
-                elem = page.locator(selector).first
-                if elem.count() > 0:
-                    # Get the parent or sibling element containing the value
-                    parent = elem.locator("..").first
-                    text = parent.text_content(timeout=1_000)
-                    if text:
-                        # Extract the number after "Market Cap"
-                        match = re.search(r'Market\s*Cap[:\s]*([0-9,]+\.?\d*)', text, re.I)
-                        if match:
-                            return _to_float(match.group(1))
-            except Exception:
-                continue
-
-    except Exception as exc:
-        logger.debug("[%s] Failed to extract market cap: %s", ticker, exc)
-
-    return None
-
-
-def _read_eps(page: Page, ticker: str) -> float | None:
-    """Extract EPS from the page.
-
-    PSX shows multiple EPS values (annual, quarterly). We try to get the
-    most recent annual EPS first.
-    """
-    try:
-        # Look for EPS in the financials or ratios section
-        text = page.content()
-
-        # Try to find annual EPS pattern
-        patterns = [
-            r'EPS[:\s]*Rs\.?\s*([0-9,]+\.?\d*)',
-            r'Earnings\s*Per\s*Share[:\s]*([0-9,]+\.?\d*)',
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, text, re.I)
+        for pattern in market_cap_patterns:
+            match = re.search(pattern, page_text, re.I)
             if match:
-                eps = _to_float(match.group(1))
-                if eps is not None:
-                    logger.debug("[%s] Found EPS: %.2f", ticker, eps)
-                    return eps
+                data["market_cap"] = _to_float(match.group(1))
+                if data["market_cap"]:
+                    # PSX shows market cap in thousands, convert to actual value
+                    data["market_cap"] = data["market_cap"] * 1000
+                    logger.debug("[%s] Market cap: %.0f", ticker, data["market_cap"])
+                    break
+
+        # Total Shares
+        shares_patterns = [
+            r'Total\s*Shares[:\s]*([0-9,]+)',
+            r'Shares\s*Outstanding[:\s]*([0-9,]+)',
+        ]
+        for pattern in shares_patterns:
+            match = re.search(pattern, page_text, re.I)
+            if match:
+                data["total_shares"] = _to_int(match.group(1))
+                break
+
+        # Free Float
+        float_pattern = r'Free\s*Float[:\s]*([0-9,]+).*?(\d+\.?\d*)\s*%'
+        match = re.search(float_pattern, page_text, re.I | re.DOTALL)
+        if match:
+            data["free_float_shares"] = _to_int(match.group(1))
+            data["free_float_pct"] = _to_float(match.group(2))
 
     except Exception as exc:
-        logger.debug("[%s] Failed to extract EPS: %s", ticker, exc)
+        logger.debug("[%s] Failed to extract equity data: %s", ticker, exc)
 
-    return None
+    return data
+
+
+def _extract_financials_data(page: Page, ticker: str) -> dict[str, Any]:
+    """Extract data from the Financials section (EPS, revenue, profit)."""
+    data: dict[str, Any] = {
+        "eps": None,
+        "eps_quarterly": None,
+        "annual_revenue": None,
+        "annual_profit": None,
+        "net_profit_margin": None,
+    }
+
+    try:
+        page_text = page.content()
+
+        # EPS - Look for annual EPS values
+        # Pattern matches "EPS: 32.26" or "EPS 42.60" etc.
+        eps_patterns = [
+            r'EPS[:\s]*(?:Rs\.?\s*)?(\d+\.?\d*)',
+            r'Earnings\s*Per\s*Share[:\s]*(\d+\.?\d*)',
+        ]
+        for pattern in eps_patterns:
+            matches = re.findall(pattern, page_text, re.I)
+            if matches:
+                # Take the first (usually most recent) EPS value
+                eps_val = _to_float(matches[0])
+                if eps_val and eps_val > 0:
+                    data["eps"] = eps_val
+                    logger.debug("[%s] EPS: %.2f", ticker, eps_val)
+                    break
+
+        # Try to get quarterly EPS separately
+        quarterly_pattern = r'Q[1-4]\s*\d{4}.*?EPS[:\s]*(\d+\.?\d*)'
+        match = re.search(quarterly_pattern, page_text, re.I)
+        if match:
+            data["eps_quarterly"] = _to_float(match.group(1))
+
+        # Profit After Tax
+        profit_patterns = [
+            r'Profit\s*After\s*Tax[:\s]*([0-9,]+)',
+            r'Net\s*Profit[:\s]*([0-9,]+)',
+        ]
+        for pattern in profit_patterns:
+            match = re.search(pattern, page_text, re.I)
+            if match:
+                data["annual_profit"] = _to_float(match.group(1))
+                break
+
+        # Net Profit Margin
+        margin_pattern = r'Net\s*Profit\s*Margin[:\s]*(\d+\.?\d*)\s*%'
+        match = re.search(margin_pattern, page_text, re.I)
+        if match:
+            data["net_profit_margin"] = _to_float(match.group(1))
+
+    except Exception as exc:
+        logger.debug("[%s] Failed to extract financials data: %s", ticker, exc)
+
+    return data
+
+
+def _extract_dividend_data(page: Page, ticker: str) -> dict[str, Any]:
+    """Extract dividend information."""
+    data: dict[str, Any] = {
+        "dividend_yield": None,
+        "last_dividend": None,
+        "dividend_date": None,
+    }
+
+    try:
+        page_text = page.content()
+
+        # Dividend Yield
+        yield_patterns = [
+            r'Dividend\s*Yield[:\s]*(\d+\.?\d*)\s*%',
+            r'Yield[:\s]*(\d+\.?\d*)\s*%',
+        ]
+        for pattern in yield_patterns:
+            match = re.search(pattern, page_text, re.I)
+            if match:
+                data["dividend_yield"] = _to_float(match.group(1))
+                break
+
+        # Look for dividend amount patterns
+        div_pattern = r'(?:Cash\s*)?Dividend[:\s]*(?:Rs\.?\s*)?(\d+\.?\d*)'
+        match = re.search(div_pattern, page_text, re.I)
+        if match:
+            data["last_dividend"] = _to_float(match.group(1))
+
+    except Exception as exc:
+        logger.debug("[%s] Failed to extract dividend data: %s", ticker, exc)
+
+    return data
 
 
 def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str, Any]:
-    """Core scraping logic for a PSX stock page.
+    """Core scraping logic for a PSX stock page with complete data extraction."""
 
-    Args:
-        page: Playwright page object (from pool or fresh browser)
-        ticker: Stock ticker symbol
-        url: Full URL to scrape
-        timeout_ms: Timeout for page operations
-
-    Returns:
-        Dictionary with price quote data
-
-    Raises:
-        ValueError: If price cannot be extracted
-    """
+    # Navigate to the page
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
     except PlaywrightTimeout:
@@ -265,28 +288,22 @@ def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str
     try:
         page.wait_for_selector(".quote__close", timeout=timeout_ms)
     except PlaywrightTimeout:
-        logger.error(
-            "[%s] .quote__close selector not found - page structure may have changed",
-            ticker
-        )
+        logger.error("[%s] .quote__close selector not found", ticker)
         raise ValueError(f"PSX page structure error for {ticker}: .quote__close not found")
 
-    # Stats panel is rendered after initial paint
+    # Wait for stats panel
     try:
         page.wait_for_selector(".quote__stats .stats_item", timeout=timeout_ms)
     except PlaywrightTimeout:
-        logger.warning(
-            "[%s] .stats_item not found - continuing with limited data",
-            ticker
-        )
+        logger.warning("[%s] .stats_item not found - continuing with limited data", ticker)
 
     # Extract price
     close_elem = page.locator(".quote__close").first
     close_txt = close_elem.text_content()
-
     price = _to_float(close_txt)
+
     if price is None or price == 0.0:
-        logger.error("[%s] No valid price found in .quote__close: %r", ticker, close_txt)
+        logger.error("[%s] No valid price found: %r", ticker, close_txt)
         raise ValueError(f"PSX page returned no price for {ticker}")
 
     # Extract change
@@ -310,97 +327,93 @@ def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str
             if change_pct is not None and change_pct > 0:
                 change_pct = -change_pct
 
-    # Read all stats
+    # Read basic stats from quote section
     stats = _read_stats(page, ticker)
 
-    # 52-week range with improved parsing
+    # 52-week range
     w52_low, w52_high = _read_52w_range(page, ticker)
 
-    # Validate 52w range against current price
-    if w52_low is not None and w52_high is not None:
-        # Sanity check: 52w range should contain or be near current price
-        margin = price * 0.5  # 50% margin for validation
-        if w52_high < price - margin or w52_low > price + margin:
-            logger.warning(
-                "[%s] 52w range (%.2f - %.2f) seems inconsistent with price %.2f",
-                ticker, w52_low, w52_high, price
-            )
-
-    # Previous close - prefer change-implied for consistency
+    # Previous close
     if change_num is not None:
         previous_close = price - change_num
     else:
         previous_close = _to_float(stats.get("ldcp"))
 
-    # P/E ratio
+    # P/E ratio from stats
     pe_ratio = _to_float(stats.get("p/e ratio (ttm)"))
     if pe_ratio is None:
         pe_ratio = _to_float(stats.get("p/e ratio"))
     if pe_ratio is None:
         pe_ratio = _to_float(stats.get("pe ratio"))
 
-    # Try to get market cap from page (not always in stats section)
-    market_cap = _read_market_cap(page, ticker)
+    # OHLC from stats
+    open_price = _to_float(stats.get("open"))
+    day_high = _to_float(stats.get("high"))
+    day_low = _to_float(stats.get("low"))
+    volume = _to_int(stats.get("volume"))
 
-    # Try to get EPS
-    eps = _read_eps(page, ticker)
+    # Wait a moment for dynamic content to load
+    page.wait_for_timeout(500)
 
+    # Extract additional data from page sections
+    equity_data = _extract_equity_data(page, ticker)
+    financials_data = _extract_financials_data(page, ticker)
+    dividend_data = _extract_dividend_data(page, ticker)
+
+    # Build result with all available data
     result = {
         "ticker": ticker.upper(),
         "market": "PSX",
         "currency": "PKR",
         "price": price,
         "previous_close": previous_close,
-        "open": _to_float(stats.get("open")),
-        "day_high": _to_float(stats.get("high")),
-        "day_low": _to_float(stats.get("low")),
-        "volume": _to_int(stats.get("volume")),
+        "open": open_price,
+        "day_high": day_high,
+        "day_low": day_low,
+        "volume": volume,
         "week_52_high": w52_high,
         "week_52_low": w52_low,
-        "market_cap": market_cap,
+        "market_cap": equity_data.get("market_cap"),
         "pe_ratio": pe_ratio,
-        "eps": eps,
-        "dividend_yield": None,  # Would need to scrape Payouts section
+        "eps": financials_data.get("eps"),
+        "dividend_yield": dividend_data.get("dividend_yield"),
         "change": change_num,
         "change_pct": change_pct,
+        # Additional data fields
+        "total_shares": equity_data.get("total_shares"),
+        "free_float_shares": equity_data.get("free_float_shares"),
+        "free_float_pct": equity_data.get("free_float_pct"),
+        "net_profit_margin": financials_data.get("net_profit_margin"),
     }
 
-    logger.debug(
-        "[%s] Successfully scraped: price=%.2f, change=%.2f%%, 52w=[%.2f-%.2f]",
+    # Log what we got
+    filled_fields = [k for k, v in result.items() if v is not None and v != 0]
+    logger.info(
+        "[%s] Scraped %d/%d fields: price=%.2f, change=%.2f%%, pe=%s, eps=%s, mcap=%s",
         ticker,
+        len(filled_fields),
+        len(result),
         price,
         change_pct or 0,
-        w52_low or 0,
-        w52_high or 0
+        pe_ratio,
+        financials_data.get("eps"),
+        equity_data.get("market_cap"),
     )
 
     return result
 
 
 def _fetch_sync(ticker: str, timeout_ms: int, *, use_pool: bool = True) -> dict[str, Any]:
-    """Synchronous fetch that can use browser pool or fresh browser.
-
-    Args:
-        ticker: Stock ticker symbol
-        timeout_ms: Timeout for page operations
-        use_pool: If True, use browser pool for better performance.
-                  If False, launch a fresh browser (useful for testing).
-
-    Returns:
-        Dictionary with price quote data
-    """
+    """Synchronous fetch with browser pool support."""
     url = PSX_URL.format(ticker=ticker.upper())
     logger.debug("[%s] Fetching PSX quote from %s (pool=%s)", ticker, url, use_pool)
 
     if use_pool:
-        # Use browser pool for better performance
         from scrapers.browser_pool import get_browser_pool
-
         pool = get_browser_pool()
         with pool.get_page_sync() as page:
             return _scrape_page(page, ticker, url, timeout_ms)
     else:
-        # Fallback: launch new browser (for testing or isolation)
         with _proactor_loop_policy_on_windows(), sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             try:
@@ -423,14 +436,5 @@ async def fetch_psx_quote(
     timeout_ms: int = 30_000,
     use_pool: bool = True,
 ) -> dict[str, Any]:
-    """Async wrapper that offloads the sync Playwright run to a thread.
-
-    Args:
-        ticker: Stock ticker symbol
-        timeout_ms: Timeout for page operations
-        use_pool: If True, use browser pool for better performance
-
-    Returns:
-        Dictionary with price quote data
-    """
+    """Async wrapper for PSX quote fetching."""
     return await asyncio.to_thread(_fetch_sync, ticker, timeout_ms, use_pool=use_pool)

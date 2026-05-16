@@ -4,9 +4,11 @@ Routes a ticker to the correct upstream data source (yfinance for
 global, Playwright scrape for PSX), normalizes the response into
 PriceQuote, and caches the result in Redis with a 60-second TTL.
 
-The agent intentionally exposes the fetch path as two private helpers
-(`_fetch_global_quote`, `_fetch_psx_quote`) so tests can monkey-patch
-them without going through the network or spinning up a real browser.
+Features:
+- Dual-source routing (yfinance for global, PSX scraper for Pakistani stocks)
+- Short-term cache (60s) for fresh quotes
+- Long-term OHLC cache (24h) to fill in missing intraday data after market close
+- Complete data extraction for both markets
 """
 
 from __future__ import annotations
@@ -24,18 +26,20 @@ from services import cache_service
 
 logger = logging.getLogger(__name__)
 
+# Cache prefixes and TTLs
 CACHE_PREFIX = "price:"
 CACHE_TTL_SECONDS = 60
+
+# Long-term OHLC cache for after-hours data
+OHLC_CACHE_PREFIX = "ohlc:"
+OHLC_CACHE_TTL_SECONDS = 86400  # 24 hours
 
 
 # ---------- Global (yfinance) ----------
 
 
 def _safe_info(ticker_obj: yf.Ticker) -> dict[str, Any]:
-    """`Ticker.info` periodically raises on Yahoo's anti-bot 401s.
-
-    Treat it as best-effort metadata rather than the source of truth.
-    """
+    """`Ticker.info` periodically raises on Yahoo's anti-bot 401s."""
     try:
         return ticker_obj.info or {}
     except Exception as exc:  # noqa: BLE001
@@ -56,8 +60,6 @@ def _safe_fast_info(ticker_obj: yf.Ticker) -> dict[str, Any]:
 def _fetch_global_quote_sync(ticker: str, market: str) -> dict[str, Any]:
     t = yf.Ticker(ticker)
 
-    # 1. History — the most reliable Yahoo endpoint. Need 2d so we can
-    #    compute previous_close from yesterday's close.
     hist = t.history(period="5d", auto_adjust=False)
     if hist.empty:
         raise ValueError(f"No price history for {ticker}")
@@ -132,6 +134,59 @@ async def _fetch_psx_quote(ticker: str) -> dict[str, Any]:
     return await fetch_psx_quote(ticker)
 
 
+# ---------- OHLC Cache (for after-hours data) ----------
+
+
+async def _get_cached_ohlc(ticker: str) -> dict[str, Any] | None:
+    """Retrieve cached OHLC data from long-term cache."""
+    cache_key = f"{OHLC_CACHE_PREFIX}{ticker}"
+    return await cache_service.get_json(cache_key)
+
+
+async def _save_ohlc_cache(ticker: str, data: dict[str, Any]) -> None:
+    """Save OHLC data to long-term cache.
+
+    Only saves if we have valid OHLC values (non-zero).
+    """
+    # Only cache if we have valid OHLC data
+    if not data.get("open") or not data.get("day_high") or not data.get("day_low"):
+        return
+
+    ohlc_data = {
+        "open": data.get("open"),
+        "day_high": data.get("day_high"),
+        "day_low": data.get("day_low"),
+        "volume": data.get("volume"),
+        "cached_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    cache_key = f"{OHLC_CACHE_PREFIX}{ticker}"
+    await cache_service.set_json(cache_key, ohlc_data, ttl_seconds=OHLC_CACHE_TTL_SECONDS)
+    logger.debug("[%s] Saved OHLC to long-term cache", ticker)
+
+
+def _merge_ohlc_from_cache(raw: dict[str, Any], cached_ohlc: dict[str, Any]) -> dict[str, Any]:
+    """Merge cached OHLC data into raw quote if current values are missing."""
+    # Only fill in missing values
+    if not raw.get("open") and cached_ohlc.get("open"):
+        raw["open"] = cached_ohlc["open"]
+        logger.debug("[%s] Using cached open: %.2f", raw["ticker"], raw["open"])
+
+    if not raw.get("day_high") and cached_ohlc.get("day_high"):
+        raw["day_high"] = cached_ohlc["day_high"]
+        logger.debug("[%s] Using cached day_high: %.2f", raw["ticker"], raw["day_high"])
+
+    if not raw.get("day_low") and cached_ohlc.get("day_low"):
+        raw["day_low"] = cached_ohlc["day_low"]
+        logger.debug("[%s] Using cached day_low: %.2f", raw["ticker"], raw["day_low"])
+
+    if not raw.get("volume") and cached_ohlc.get("volume"):
+        raw["volume"] = cached_ohlc["volume"]
+        logger.debug("[%s] Using cached volume: %d", raw["ticker"], raw["volume"])
+
+    return raw
+
+
 # ---------- Public API ----------
 
 
@@ -143,20 +198,37 @@ async def get_price(
 ) -> PriceQuote:
     """Fetch a PriceQuote, hitting Redis first.
 
+    For PSX stocks, if OHLC data is missing (after market hours),
+    we fill in from a 24-hour cache of last known values.
+
     Raises ValueError if the upstream cannot return a price.
     """
     ticker = ticker.upper()
     cache_key = f"{CACHE_PREFIX}{ticker}"
 
+    # Check short-term cache first
     if use_cache:
         cached = await cache_service.get_json(cache_key)
         if cached:
             cached["cached"] = True
             return PriceQuote.model_validate(cached)
 
+    # Fetch fresh data
     if market == "PSX":
         raw = await _fetch_psx_quote(ticker)
         source = "psx"
+
+        # Check if OHLC is missing and try to fill from long-term cache
+        if not raw.get("open") or not raw.get("day_high") or not raw.get("day_low"):
+            cached_ohlc = await _get_cached_ohlc(ticker)
+            if cached_ohlc:
+                logger.info("[%s] OHLC missing, using cached values from %s",
+                           ticker, cached_ohlc.get("cached_at", "unknown"))
+                raw = _merge_ohlc_from_cache(raw, cached_ohlc)
+
+        # Save OHLC to long-term cache if we have valid data
+        if raw.get("open") and raw.get("day_high") and raw.get("day_low"):
+            await _save_ohlc_cache(ticker, raw)
     else:
         raw = await _fetch_global_quote(ticker, market)
         source = "yfinance"
@@ -166,11 +238,14 @@ async def get_price(
     raw["cached"] = False
 
     quote = PriceQuote.model_validate(raw)
+
+    # Save to short-term cache
     await cache_service.set_json(
         cache_key,
         quote.model_dump(mode="json"),
         ttl_seconds=CACHE_TTL_SECONDS,
     )
+
     return quote
 
 

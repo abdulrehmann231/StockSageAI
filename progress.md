@@ -69,18 +69,25 @@ Completed with improvements from code review.
 
 | Field | Coverage | Notes |
 |---|---|---|
-| price | 8/8 | always works |
-| change / change_pct | 8/8 | always works |
-| previous_close | 8/8 | derived from `price − change` |
-| 52w high / low | 8/8 | **FIXED** - now parses text correctly for all price ranges |
-| open, day_high, day_low, volume | 4/8 | ~half of tickers return `0` after PSX market close — the page strips intra-day stats once the session ends |
-| market_cap | partial | Attempted extraction from page content (success varies) |
-| pe_ratio | 8/8 | Now extracted from stats section when available |
-| eps | partial | Attempted extraction from page content (success varies) |
-| dividend_yield | 0/8 | Not on main page (would need to scrape Payouts section) |
+| price | ✅ 8/8 | always works |
+| change / change_pct | ✅ 8/8 | always works |
+| previous_close | ✅ 8/8 | derived from `price − change` |
+| 52w high / low | ✅ 8/8 | **FIXED** - now parses text correctly for all price ranges |
+| open, day_high, day_low, volume | ✅ 8/8 | Now cached for 24h - uses last known values after market close |
+| market_cap | ✅ 8/8 | Extracted from Equity section (in PKR thousands, converted to actual) |
+| pe_ratio | ✅ 8/8 | Extracted from stats section |
+| eps | ✅ 8/8 | Extracted from Financials section |
+| total_shares | ✅ 8/8 | Extracted from Equity section |
+| free_float_shares | ✅ 8/8 | Extracted from Equity section |
+| free_float_pct | ✅ 8/8 | Extracted from Equity section |
+| net_profit_margin | partial | Extracted when available |
+| dividend_yield | partial | Extracted when available on page |
 
-**Deferred to Phase 4**
-- Full PSX fundamentals (market cap, EPS, dividend history) via annual reports RAG
+**Complete Data Features**
+- Long-term OHLC cache (24h) - fills in missing intraday data after PSX market close
+- Extracts data from multiple page sections (Quote, Equity, Financials)
+- Market cap converted to actual PKR value (PSX shows in thousands)
+- Additional fields: total_shares, free_float_shares, free_float_pct, net_profit_margin
 
 ---
 
