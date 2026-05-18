@@ -34,7 +34,7 @@ lxml==5.3.0
 playwright==1.48.0
 
 # --- Financial data ---
-yfinance==0.2.44
+yfinance>=1.3.0  # earlier 0.2.x versions fail Yahoo crumb auth
 
 # --- AI / Agents ---
 langchain==0.3.7

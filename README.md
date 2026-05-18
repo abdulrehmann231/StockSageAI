@@ -54,6 +54,13 @@ Tracked in `plan.md` § 10 (Phased Build Plan). Each phase ships on its own feat
 
 ## Notes
 
+### Playwright (Phase 2+)
+The PSX price agent uses Playwright/Chromium. After `pip install -r requirements.txt`,
+run once:
+```bash
+python -m playwright install chromium
+```
+
 ### Migrations
 For local dev the backend auto-creates tables via SQLAlchemy `Base.metadata.create_all`
 on startup. **Before production deploy, switch to Alembic-managed migrations** —

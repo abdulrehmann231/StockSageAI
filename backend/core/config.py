@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     app_name: str = "StockSage AI"
     app_env: str = Field(default="development")
     log_level: str = Field(default="INFO")
+    debug: bool = Field(default=True)  # Human-readable logs when True, JSON when False
 
     # Database
     database_url: str
