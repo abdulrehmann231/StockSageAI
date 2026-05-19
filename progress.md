@@ -62,6 +62,7 @@ Completed with improvements from code review.
 | PSX 52w range fix | ✅ | Fixed parsing for high-priced tickers like NESTLE (now parses visible text instead of unreliable data attributes) |
 | PSX selector logging | ✅ | Added comprehensive logging for selector failures to detect PSX website changes early |
 | Browser pool | ✅ | Implemented `scrapers/browser_pool.py` - reuses Chromium instance across requests (~1-2s savings per request) |
+| Browser pool threading fix | ✅ | Rewrote `BrowserPool` around a pinned `ThreadPoolExecutor(max_workers=1)` so every Playwright call lands on the same thread — eliminates the intermittent `greenlet.error: Cannot switch to a different thread` that fired under sequential and concurrent PSX scrapes. Verified across 3 sequential + 1 concurrent (`asyncio.gather`, 5 tickers) run with zero greenlet errors. |
 | Integration test markers | ✅ | Added `@pytest.mark.live` and `@pytest.mark.slow` markers in pytest.ini for gating network tests |
 | PSX scraper tests | ✅ | Added `tests/test_psx_scraper.py` with unit tests for parsing helpers + integration tests for live scraping |
 
@@ -120,15 +121,14 @@ Completed infrastructure improvements from code review:
   - Returns 503 with detailed status if any dependency is unhealthy
 
 ### Browser Pool for Playwright ✅
-- New `scrapers/browser_pool.py` module:
-  - Singleton `BrowserPool` class with thread-safe lazy initialization
-  - Reuses single Chromium browser instance across requests
-  - Creates fresh contexts per request for isolation
-  - Automatic cleanup on application shutdown
-  - `get_page()` async context manager for easy usage
-  - `get_page_sync()` sync context manager for thread pool usage
-- PSX scraper updated to use pool by default (configurable via `use_pool` param)
-- Estimated performance improvement: ~1-2s per PSX request
+- `scrapers/browser_pool.py` module:
+  - Singleton `BrowserPool` owning a `ThreadPoolExecutor(max_workers=1)` — every Playwright operation (launch, `new_context`, page work, teardown) runs on the same pinned thread, so greenlet state never has to switch threads.
+  - Reuses single Chromium browser instance across requests; creates fresh contexts per call for isolation.
+  - Automatic cleanup on application shutdown (`atexit` + lifespan hook).
+  - Public API: `run_with_page(fn, *, user_agent=None)` (blocking) and `run_with_page_async(fn, *, user_agent=None)` (async via `loop.run_in_executor`). The earlier `get_page` / `get_page_sync` context-manager API was removed — it could not safely return a `page` across threads under the sync-greenlet model.
+- PSX scraper (`scrapers/psx_prices.py`) calls `pool.run_with_page_async(...)` directly from `fetch_psx_quote` instead of wrapping the pool in `asyncio.to_thread`; the `use_pool=False` path is preserved as `_fetch_sync_no_pool` for one-shot callers.
+- Tradeoff: PSX scrapes are now **serialized** through the single pinned thread. Acceptable while the 60s short-term cache + 24h OHLC cache absorb most repeat traffic; would need a pool-of-pools for true parallel PSX scraping later.
+- Estimated performance improvement vs no pool: ~1-2s per PSX request (Chromium reuse).
 
 ---
 
@@ -179,5 +179,8 @@ Not started.
 - [x] Add structured logging with request IDs.
 - [x] Add health check endpoints for Redis/DB connectivity.
 - [x] Implement browser pool for Playwright to reuse browser instances.
+- [x] Fix browser-pool threading bug (pinned-thread model — see Phase 2 improvements table).
+- [ ] **Delisted-ticker detection** — PSX scraper currently returns stale-by-many-months data for delisted stocks with no signal (surfaced via ENGRO: page shows `DELISTED` badge + "As of Fri, Jan 3, 2025"). Add `is_delisted: bool` and `data_as_of: date | None` to `PriceQuote`, detect the badge in `scrapers/psx_prices.py`. Important before Phase 7 (Portfolio) where users may hold delisted positions.
+- [ ] **yfinance dividend yield normalization** — yfinance sometimes returns a fraction-of-1 (NVDA `0.0002` → displayed as `+0.02%`) where percent was expected. Sanity check: if `value < 1` treat as fraction, else as percent already. Affects `agents/price_agent.py:120`.
 - [ ] Add React error boundary in frontend.
 - [ ] Add offline/network error handling in frontend.
