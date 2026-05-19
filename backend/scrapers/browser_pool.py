@@ -7,17 +7,18 @@ This module provides a singleton browser pool that:
 3. Creates fresh contexts (isolated sessions) per request
 4. Handles cleanup on application shutdown
 
+Threading model: Playwright's sync API uses greenlets that are pinned to
+the thread where ``sync_playwright().start()`` ran. Calling any page method
+from a different thread raises ``greenlet.error: Cannot switch to a
+different thread``. We avoid that by owning a single dedicated worker
+thread and routing *every* Playwright operation (launch, new_context,
+page work, cleanup) through it.
+
 Usage:
     from scrapers.browser_pool import get_browser_pool
 
     pool = get_browser_pool()
-    async with pool.get_page() as page:
-        await page.goto(url)
-        # ... use page
-
-The pool automatically starts the browser in a background thread
-since Playwright sync API blocks. Pages are created from isolated
-contexts to prevent state leakage between requests.
+    result = await pool.run_with_page_async(lambda page: scrape(page))
 """
 
 from __future__ import annotations
@@ -27,17 +28,15 @@ import atexit
 import logging
 import sys
 import threading
-from contextlib import asynccontextmanager, contextmanager
-from typing import TYPE_CHECKING, Any, Generator
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, TypeVar
 
 from playwright.sync_api import Browser, Page, Playwright, sync_playwright
 
-if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
-
 logger = logging.getLogger(__name__)
 
-# User agent to use for all browser contexts
+T = TypeVar("T")
+
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -46,18 +45,18 @@ DEFAULT_USER_AGENT = (
 
 
 class BrowserPool:
-    """Thread-safe singleton browser pool for Playwright.
+    """Singleton browser pool with a pinned worker thread.
 
-    The browser runs in a dedicated thread to avoid event loop conflicts
-    with asyncio. Each request gets a fresh browser context for isolation.
+    All Playwright operations execute on ``self._executor``'s single
+    worker, so greenlet state stays bound to one thread.
     """
 
     _instance: "BrowserPool | None" = None
-    _lock = threading.Lock()
+    _instance_lock = threading.Lock()
 
     def __new__(cls) -> "BrowserPool":
         if cls._instance is None:
-            with cls._lock:
+            with cls._instance_lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
                     cls._instance._initialized = False
@@ -66,146 +65,121 @@ class BrowserPool:
     def __init__(self) -> None:
         if self._initialized:
             return
-
         self._initialized = True
+
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="browser-pool"
+        )
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
-        self._browser_lock = threading.Lock()
         self._shutdown = False
 
-        # Register cleanup on process exit
         atexit.register(self.close)
-
         logger.debug("BrowserPool initialized")
 
-    def _ensure_browser(self) -> Browser:
-        """Lazily start the browser on first use.
+    # ----- pinned-thread operations -----
 
-        Thread-safe initialization of the Playwright browser.
-        """
+    def _ensure_browser_pinned(self) -> Browser:
+        """Lazily launch the browser. Must run on the pinned thread."""
+        if self._shutdown:
+            raise RuntimeError("BrowserPool has been shut down")
         if self._browser is not None and self._browser.is_connected():
             return self._browser
 
-        with self._browser_lock:
-            # Double-check after acquiring lock
-            if self._browser is not None and self._browser.is_connected():
-                return self._browser
+        logger.info("Starting Playwright browser")
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-            if self._shutdown:
-                raise RuntimeError("BrowserPool has been shut down")
-
-            logger.info("Starting Playwright browser")
-
-            # Use Windows proactor policy if needed
-            if sys.platform == "win32":
-                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
-            self._playwright = sync_playwright().start()
-            self._browser = self._playwright.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-dev-shm-usage",  # Overcome limited /dev/shm in containers
-                    "--no-sandbox",  # Required for some Linux environments
-                    "--disable-setuid-sandbox",
-                ],
-            )
-
-            logger.info("Browser started successfully")
-            return self._browser
-
-    @contextmanager
-    def get_page_sync(
-        self,
-        user_agent: str | None = None,
-    ) -> Generator[Page, None, None]:
-        """Get a page from an isolated browser context (sync version).
-
-        Creates a new context for each request to ensure isolation,
-        then closes the context when done.
-
-        Args:
-            user_agent: Custom user agent string (optional).
-
-        Yields:
-            A Playwright Page object.
-        """
-        browser = self._ensure_browser()
-
-        context = browser.new_context(
-            user_agent=user_agent or DEFAULT_USER_AGENT,
+        self._playwright = sync_playwright().start()
+        self._browser = self._playwright.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+            ],
         )
+        logger.info("Browser started successfully")
+        return self._browser
 
+    def _run_with_page_pinned(
+        self,
+        fn: Callable[[Page], T],
+        user_agent: str | None,
+    ) -> T:
+        """Create an isolated context+page and run fn(page). Pinned thread."""
+        browser = self._ensure_browser_pinned()
+        context = browser.new_context(user_agent=user_agent or DEFAULT_USER_AGENT)
         try:
             page = context.new_page()
-            yield page
+            return fn(page)
         finally:
-            context.close()
+            try:
+                context.close()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Context close error: %s", exc)
 
-    @asynccontextmanager
-    async def get_page(
+    def _close_pinned(self) -> None:
+        """Tear down the browser/Playwright. Pinned thread."""
+        if self._browser is not None:
+            try:
+                self._browser.close()
+                logger.info("Browser closed")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Error closing browser: %s", exc)
+            finally:
+                self._browser = None
+        if self._playwright is not None:
+            try:
+                self._playwright.stop()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Error stopping Playwright: %s", exc)
+            finally:
+                self._playwright = None
+
+    # ----- public API -----
+
+    def run_with_page(
         self,
+        fn: Callable[[Page], T],
+        *,
         user_agent: str | None = None,
-    ) -> "AsyncGenerator[Page, None]":
-        """Get a page from an isolated browser context (async version).
+    ) -> T:
+        """Run ``fn(page)`` on the pinned browser thread (blocking)."""
+        if self._shutdown:
+            raise RuntimeError("BrowserPool has been shut down")
+        future = self._executor.submit(self._run_with_page_pinned, fn, user_agent)
+        return future.result()
 
-        Runs the sync browser operations in a thread pool.
-
-        Args:
-            user_agent: Custom user agent string (optional).
-
-        Yields:
-            A Playwright Page object.
-        """
-        # Run browser initialization in thread if needed
-        await asyncio.to_thread(self._ensure_browser)
-
-        browser = self._browser
-        if browser is None:
-            raise RuntimeError("Browser not available")
-
-        # Create context in thread
-        context = await asyncio.to_thread(
-            browser.new_context,
-            user_agent=user_agent or DEFAULT_USER_AGENT,
+    async def run_with_page_async(
+        self,
+        fn: Callable[[Page], T],
+        *,
+        user_agent: str | None = None,
+    ) -> T:
+        """Run ``fn(page)`` on the pinned browser thread (async)."""
+        if self._shutdown:
+            raise RuntimeError("BrowserPool has been shut down")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._executor, self._run_with_page_pinned, fn, user_agent
         )
 
-        try:
-            page = await asyncio.to_thread(context.new_page)
-            yield page
-        finally:
-            await asyncio.to_thread(context.close)
-
     def close(self) -> None:
-        """Shutdown the browser pool.
-
-        Safe to call multiple times.
-        """
-        with self._browser_lock:
-            if self._shutdown:
-                return
-
-            self._shutdown = True
-
-            if self._browser is not None:
-                try:
-                    self._browser.close()
-                    logger.info("Browser closed")
-                except Exception as exc:
-                    logger.warning("Error closing browser: %s", exc)
-                finally:
-                    self._browser = None
-
-            if self._playwright is not None:
-                try:
-                    self._playwright.stop()
-                except Exception as exc:
-                    logger.warning("Error stopping Playwright: %s", exc)
-                finally:
-                    self._playwright = None
+        """Shutdown the pool. Idempotent; safe from any thread."""
+        if self._shutdown:
+            return
+        self._shutdown = True
+        try:
+            future = self._executor.submit(self._close_pinned)
+            future.result(timeout=10)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("BrowserPool close error: %s", exc)
+        finally:
+            self._executor.shutdown(wait=True)
 
     @property
     def is_running(self) -> bool:
-        """Check if the browser is currently running."""
         return (
             self._browser is not None
             and self._browser.is_connected()
@@ -218,10 +192,6 @@ _pool: BrowserPool | None = None
 
 
 def get_browser_pool() -> BrowserPool:
-    """Get the global browser pool instance.
-
-    Creates the pool on first call.
-    """
     global _pool
     if _pool is None:
         _pool = BrowserPool()
@@ -229,11 +199,8 @@ def get_browser_pool() -> BrowserPool:
 
 
 async def close_browser_pool() -> None:
-    """Close the browser pool.
-
-    Call this on application shutdown.
-    """
     global _pool
     if _pool is not None:
-        await asyncio.to_thread(_pool.close)
+        pool = _pool
         _pool = None
+        await asyncio.to_thread(pool.close)

@@ -390,31 +390,24 @@ def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str
     return result
 
 
-def _fetch_sync(ticker: str, timeout_ms: int, *, use_pool: bool = True) -> dict[str, Any]:
-    """Synchronous fetch with browser pool support."""
+def _fetch_sync_no_pool(ticker: str, timeout_ms: int) -> dict[str, Any]:
+    """One-shot fetch without the pool. Used when use_pool=False."""
     url = PSX_URL.format(ticker=ticker.upper())
-    logger.debug("[%s] Fetching PSX quote from %s (pool=%s)", ticker, url, use_pool)
-
-    if use_pool:
-        from scrapers.browser_pool import get_browser_pool
-        pool = get_browser_pool()
-        with pool.get_page_sync() as page:
-            return _scrape_page(page, ticker, url, timeout_ms)
-    else:
-        with _proactor_loop_policy_on_windows(), sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            try:
-                context = browser.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/120.0 Safari/537.36"
-                    )
+    logger.debug("[%s] Fetching PSX quote from %s (no pool)", ticker, url)
+    with _proactor_loop_policy_on_windows(), sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0 Safari/537.36"
                 )
-                page = context.new_page()
-                return _scrape_page(page, ticker, url, timeout_ms)
-            finally:
-                browser.close()
+            )
+            page = context.new_page()
+            return _scrape_page(page, ticker, url, timeout_ms)
+        finally:
+            browser.close()
 
 
 async def fetch_psx_quote(
@@ -424,4 +417,13 @@ async def fetch_psx_quote(
     use_pool: bool = True,
 ) -> dict[str, Any]:
     """Async wrapper for PSX quote fetching."""
-    return await asyncio.to_thread(_fetch_sync, ticker, timeout_ms, use_pool=use_pool)
+    if use_pool:
+        from scrapers.browser_pool import get_browser_pool
+
+        pool = get_browser_pool()
+        url = PSX_URL.format(ticker=ticker.upper())
+        logger.debug("[%s] Fetching PSX quote from %s (pool)", ticker, url)
+        return await pool.run_with_page_async(
+            lambda page: _scrape_page(page, ticker, url, timeout_ms)
+        )
+    return await asyncio.to_thread(_fetch_sync_no_pool, ticker, timeout_ms)
