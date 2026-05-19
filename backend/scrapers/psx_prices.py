@@ -19,6 +19,7 @@ import logging
 import re
 import sys
 from contextlib import contextmanager
+from datetime import date, datetime
 from typing import Any
 
 from playwright.sync_api import Page, sync_playwright, TimeoutError as PlaywrightTimeout
@@ -79,6 +80,46 @@ def _parse_range_text(text: str) -> tuple[float | None, float | None]:
 def _normalize_label(label: str) -> str:
     """Normalize a label for consistent lookup."""
     return label.strip().lower().replace("'", "").replace("(", "").replace(")", "")
+
+
+# "As of Fri, Jan 3, 2025 4:49 PM" -> capture "Jan", "3", "2025"
+_AS_OF_RE = re.compile(
+    r"As of\s+\w+,\s+(\w+)\s+(\d{1,2}),\s+(\d{4})",
+    re.IGNORECASE,
+)
+
+
+def _detect_listing_status(page_text: str, ticker: str) -> tuple[bool, date | None]:
+    """Detect the DELISTED badge and the 'As of <date>' stamp.
+
+    The badge text gets concatenated with neighbouring words in the body's
+    ``text_content`` (e.g. ``LimitedDELISTEDFERTILIZER``) so a word-boundary
+    regex won't match it. Case-sensitive uppercase substring keeps us from
+    false-matching the lowercase "delisted from the Exchange" disclaimer
+    paragraph that appears on every PSX company page.
+    """
+    is_delisted = "DELISTED" in page_text
+
+    data_as_of: date | None = None
+    match = _AS_OF_RE.search(page_text)
+    if match:
+        month_str, day_str, year_str = match.groups()
+        try:
+            data_as_of = datetime.strptime(
+                f"{month_str} {day_str} {year_str}", "%b %d %Y"
+            ).date()
+        except ValueError:
+            try:
+                data_as_of = datetime.strptime(
+                    f"{month_str} {day_str} {year_str}", "%B %d %Y"
+                ).date()
+            except ValueError as exc:
+                logger.debug("[%s] Could not parse as-of date %r: %s",
+                             ticker, match.group(0), exc)
+
+    if is_delisted:
+        logger.info("[%s] DELISTED detected; data_as_of=%s", ticker, data_as_of)
+    return is_delisted, data_as_of
 
 
 def _read_all_stats(page: Page, ticker: str) -> dict[str, str]:
@@ -350,6 +391,14 @@ def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str
         except Exception as exc:
             logger.debug("[%s] Failed to calculate Dividend Yield: %s", ticker, exc)
 
+    # Listing status (DELISTED badge + "As of <date>" stamp)
+    try:
+        page_text = page.locator("body").text_content() or ""
+        is_delisted, data_as_of = _detect_listing_status(page_text, ticker)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("[%s] Listing-status detection failed: %s", ticker, exc)
+        is_delisted, data_as_of = False, None
+
     # Build result
     result = {
         "ticker": ticker.upper(),
@@ -373,6 +422,8 @@ def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str
         "free_float_shares": free_float_shares,
         "free_float_pct": free_float_pct,
         "net_profit_margin": net_profit_margin,
+        "is_delisted": is_delisted,
+        "data_as_of": data_as_of,
     }
 
     # Log summary

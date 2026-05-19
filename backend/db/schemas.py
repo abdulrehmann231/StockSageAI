@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
@@ -87,6 +87,12 @@ class PriceQuote(BaseModel):
     free_float_shares: int | None = None
     free_float_pct: float | None = None
     net_profit_margin: float | None = None
+
+    # Listing status — for PSX, comes from the "DELISTED" badge and the
+    # "As of <date>" stamp on dps.psx.com.pk. Global path always sets the
+    # defaults (False / None) since yfinance doesn't surface delisting.
+    is_delisted: bool = False
+    data_as_of: date | None = None
 
     # Metadata
     fetched_at: datetime
