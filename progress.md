@@ -134,8 +134,24 @@ Completed infrastructure improvements from code review:
 
 ## Phase 3 — News + Sentiment Agents ⏳
 
-Not started. Per plan § 4.5 / § 4.7: scraping Business Recorder / Dawn / Profit Pakistan for PSX, NewsAPI + Yahoo Finance feed for global; Reddit + StockTwits for sentiment.
+ Per plan § 4.5 / § 4.7: scraping Business Recorder / Dawn / Profit Pakistan for PSX, NewsAPI + Yahoo Finance feed for global; Reddit + StockTwits for sentiment.
 
+Phase 3 — News Agent 🟡
+
+Multi-source fetch: Business Recorder, Dawn, Profit Pakistan, Google News (PSX); Yahoo Finance, NewsAPI, Google News (Global)
+Two-layer analysis: LLM (OpenRouter) for relevance judgment, deterministic rules as fallback
+Impact classification (HIGH_POSITIVE → HIGH_NEGATIVE), catalyst extraction (earnings, dividend, M&A, regulatory, executive_change, product, lawsuit)
+Near-duplicate deduplication, two-sentence summary pipeline with extractive fallback
+Redis cache (30-min TTL); cache/source failures isolated — never block results
+LangGraph-compatible news_agent(state) node wrapper + CLI for local testing
+
+NOTE : 
+Global stocks test (it aggressively discards articles , no issue in scraping as its bring articles)   
+Redis cache test
+
+REMAINING : 
+Sentiment agent 
+Overall test
 ---
 
 ## Phase 4 — Filings RAG Agent ⏳
