@@ -153,7 +153,7 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 
 ### News Agent Notes
 
-- Global sources can return many weak/paywalled/thin articles; the agent intentionally discards low-quality candidates instead of forcing five weak articles into the report.
+- Global sources can return many articles; the agent intentionally discards low-quality candidates instead of forcing five weak articles into the report.
 - Scraping is generally working; when global results are low, it is usually because relevance/quality filters rejected articles, not because sources returned nothing.
 - Redis cache behavior still needs to be tested with Redis running locally or in Docker.
 
