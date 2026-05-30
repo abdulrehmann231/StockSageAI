@@ -4,6 +4,10 @@ Living status of every phase in [`plan.md`](./plan.md) § 10. Updated as branche
 
 Legend: ✅ done · 🟡 partial / in progress · ⏳ not started
 
+_Last reviewed: 2026-05-30 (after PR #5 — news agent — merged to `main`)._
+
+**Snapshot:** Phases 0–2 complete and merged. Phase 3 is **in progress** — the News Agent is built and merged, but the Sentiment Agent is still outstanding and neither agent is wired into an HTTP endpoint or orchestrator yet. Phases 4–8 not started.
+
 ---
 
 ## Phase 0 — Setup ✅
@@ -49,7 +53,7 @@ Completed with improvements from code review.
 - Redis cache at `services/cache_service.py` with 60s TTL; tests use db 15 with autouse flush
 - `GET /api/stocks/{ticker}/price` → `PriceQuote` JSON; 404 if unknown ticker, 502 if upstream fails
 - Frontend stock detail page `/dashboard/stocks/[ticker]` with live `PriceCard` (TanStack Query, 30s refetch)
-- Tests: 13 added (cache service, agent stubs, endpoint behaviour) — total backend suite now **40/40 green**
+- Tests: 13 added (cache service, agent stubs, endpoint behaviour). The backend `tests/` suite has since grown to **72 test functions** (13 auth · 4 cache · 2 health · 9 price · 32 PSX scraper · 12 stocks); the PSX-scraper additions include live/slow-gated integration tests behind `@pytest.mark.live` / `@pytest.mark.slow`.
 
 **Verified live**
 - Global / yfinance: AAPL → price $300.23, +0.68%, full OHLC + 52w + market cap + P/E + EPS + dividend yield
@@ -132,13 +136,15 @@ Completed infrastructure improvements from code review:
 
 ---
 
-## Phase 3 — News + Sentiment Agents ⏳
+## Phase 3 — News + Sentiment Agents 🟡
 
 Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for PSX, NewsAPI + Yahoo Finance feed for global, then build Reddit + StockTwits sentiment ingestion.
 
-### News Agent ✅
+News Agent done and merged (PR #5); Sentiment Agent not started; neither agent is exposed via the API or wired into an orchestrator yet.
 
-- Implemented `backend/agents/news_agent.py` with a LangGraph-compatible `news_agent(state)` node wrapper and local CLI testing support.
+### News Agent ✅ (merged — `feat/news-agent`, PR #5)
+
+- Implemented `backend/agents/news_agent.py` (~2,600 LOC) with a LangGraph-compatible `news_agent(state)` node wrapper and local CLI testing support.
 - Added multi-source news fetching:
   - PSX: Business Recorder, Dawn Business, Profit Pakistan, Google News.
   - Global: Yahoo Finance, NewsAPI, Google News.
@@ -159,7 +165,8 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 
 ### Remaining In Phase 3
 
-- Implement Sentiment Agent per plan § 4.7 using Reddit + StockTwits sentiment sources.
+- **Implement Sentiment Agent** per plan § 4.7 using Reddit + StockTwits sentiment sources. _(not started)_
+- **Wire the News Agent into the HTTP API** — `main.py` currently mounts only `auth`, `stocks`, and `prices` routers; there is no `GET /api/stocks/{ticker}/news` endpoint yet. The agent is reachable only as a module + the `backend/test2.py` CLI harness.
 - Run full phase-level integration test after Sentiment Agent is complete.
 - Verify News + Sentiment agents together inside the orchestrator/LangGraph flow.
 - Re-test Redis cache speed once Redis is running.
