@@ -134,8 +134,35 @@ Completed infrastructure improvements from code review:
 
 ## Phase 3 — News + Sentiment Agents ⏳
 
-Not started. Per plan § 4.5 / § 4.7: scraping Business Recorder / Dawn / Profit Pakistan for PSX, NewsAPI + Yahoo Finance feed for global; Reddit + StockTwits for sentiment.
+Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for PSX, NewsAPI + Yahoo Finance feed for global, then build Reddit + StockTwits sentiment ingestion.
 
+### News Agent ✅
+
+- Implemented `backend/agents/news_agent.py` with a LangGraph-compatible `news_agent(state)` node wrapper and local CLI testing support.
+- Added multi-source news fetching:
+  - PSX: Business Recorder, Dawn Business, Profit Pakistan, Google News.
+  - Global: Yahoo Finance, NewsAPI, Google News.
+- Added dedicated scraper modules under `backend/scrapers/` plus shared article extraction and normalization helpers.
+- Added LLM-based relevance, summary, impact, and catalyst analysis using OpenRouter/Gemini-compatible chat completion flow.
+- Added deterministic fallback logic for cases where the LLM is unavailable or source text is weak.
+- Supports plan-compatible impact labels: `HIGH_POSITIVE`, `MEDIUM_POSITIVE`, `NEUTRAL`, `MEDIUM_NEGATIVE`, `HIGH_NEGATIVE`.
+- Supports plan-compatible catalysts: `earnings`, `dividend`, `M&A`, `regulatory`, `executive_change`, `product`, `lawsuit`.
+- Added recency filtering, near-duplicate removal, source failure isolation, two-sentence summary cleanup, and article relevance safeguards.
+- Added Redis cache support with 30-minute TTL; cache failures do not block fresh news results.
+- Added `backend/test2.py` for local real-world testing across PSX and global tickers.
+
+### News Agent Notes
+
+- Global sources can return many articles; the agent intentionally discards low-quality candidates instead of forcing five weak articles into the report.
+- Scraping is generally working; when global results are low, it is usually because relevance/quality filters rejected articles, not because sources returned nothing.
+- Redis cache behavior still needs to be tested with Redis running locally or in Docker.
+
+### Remaining In Phase 3
+
+- Implement Sentiment Agent per plan § 4.7 using Reddit + StockTwits sentiment sources.
+- Run full phase-level integration test after Sentiment Agent is complete.
+- Verify News + Sentiment agents together inside the orchestrator/LangGraph flow.
+- Re-test Redis cache speed once Redis is running.
 ---
 
 ## Phase 4 — Filings RAG Agent ⏳
