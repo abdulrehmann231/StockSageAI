@@ -68,3 +68,6 @@ redis-data/
 
 # Claude Code / agent metadata
 .claude/
+
+# Redis snapshot artifacts (from local/sandbox runs)
+*.rdb
