@@ -75,6 +75,11 @@ def _normalize(message: dict[str, Any]) -> dict[str, Any] | None:
         "author": user.get("username"),
         "url": None,
         "label": _extract_label(message),
+        # NOTE: ``score`` is a per-source relevance proxy only, NOT a
+        # cross-source-comparable engagement metric. Here it is the author's
+        # follower count, whereas reddit_sentiment.py uses the submission's
+        # upvote count. The Sentiment Agent uses it to rank top points and
+        # should not assume these values share a scale across sources.
         "score": user.get("followers"),
     }
 

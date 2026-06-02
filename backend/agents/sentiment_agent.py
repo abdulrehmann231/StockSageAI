@@ -118,6 +118,20 @@ def _tokenize(text: str) -> list[str]:
     return _WORD_RE.findall(text.lower())
 
 
+def _term_hit(term: str, tokens: set[str], lowered: str) -> bool:
+    """Match a lexicon ``term`` against a post.
+
+    Single plain words are matched exactly against the post's token set so they
+    can't fire on substrings of unrelated words (e.g. ``"ath"`` inside *death*,
+    ``"loss"`` inside *glossy*). Multi-word phrases and emoji/symbol entries —
+    which never appear as standalone word tokens — fall back to a substring
+    test so things like ``"buy the dip"`` and ``"🚀"`` still match.
+    """
+    if " " in term or not term.isalnum():
+        return term in lowered  # multi-word phrase or emoji/symbol
+    return term in tokens  # single word: exact token match
+
+
 def classify_post(text: str, provider_label: str | None = None) -> str:
     """Classify a single post as 'bullish' | 'bearish' | 'neutral'.
 
@@ -130,8 +144,8 @@ def classify_post(text: str, provider_label: str | None = None) -> str:
     lowered = text.lower()
     tokens = set(_tokenize(text))
 
-    bull = sum(1 for term in BULLISH_TERMS if (term in tokens or term in lowered))
-    bear = sum(1 for term in BEARISH_TERMS if (term in tokens or term in lowered))
+    bull = sum(1 for term in BULLISH_TERMS if _term_hit(term, tokens, lowered))
+    bear = sum(1 for term in BEARISH_TERMS if _term_hit(term, tokens, lowered))
 
     if bull > bear:
         return "bullish"
@@ -296,8 +310,7 @@ async def _gather_posts(
     used_sources: list[str] = []
     for (name, _fn, _args), result in zip(fetchers, results):
         if isinstance(result, Exception):
-            msg = f"{name}: {result}" or repr(result)
-            errors.append(msg)
+            errors.append(f"{name}: {result}")
             logger.info("Sentiment source %s failed for %s: %s", name, ticker, result)
             continue
         if result:
