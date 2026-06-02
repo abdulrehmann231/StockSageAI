@@ -108,7 +108,13 @@ A multi-agent AI system that automatically:
 
 ### 3.3 Databases
 - **PostgreSQL:** Users, watchlists, reports, alerts, cached prices (Supabase for managed hosting)
-- **Pinecone:** Vector DB for SEC filings + PSX annual reports RAG
+- **pgvector (Postgres extension):** Vector DB for SEC filings + PSX annual reports RAG.
+  **Decision (Phase 4):** chosen over Pinecone — zero cost, no extra service/account, and
+  metadata lives in real SQL columns so retrieval pre-filters by `ticker`/`filing_type`/
+  `fiscal_year` in a plain `WHERE` clause (more expressive than Pinecone's metadata filter).
+  Embeddings are computed **locally** with `BAAI/bge-small-en-v1.5` (384-dim) via
+  sentence-transformers — no API key, no per-token cost. Pinecone + OpenAI embeddings
+  remain a drop-in future swap behind `services/vector_store.py` + `services/embeddings.py`.
 - **Redis:** Caching, task queue, real-time price storage, rate limiting
 - **S3-compatible (Cloudflare R2 or Supabase Storage):** Storing scraped PDFs, generated reports
 

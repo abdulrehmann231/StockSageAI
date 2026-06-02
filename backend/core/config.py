@@ -56,7 +56,19 @@ class Settings(BaseSettings):
     reddit_client_secret: str | None = None
     reddit_user_agent: str = "stocksage-ai/0.1 sentiment"
 
-    # Pinecone
+    # Vector store / embeddings (Filings RAG — pgvector + local embeddings)
+    # No API keys required. Embeddings are computed locally; vectors live in
+    # Postgres via the pgvector extension.
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_dim: int = 384  # must match embedding_model's output dimension
+    embedding_query_prefix: str = ""  # bge models recommend a query instruction; set per-model
+    filings_cache_ttl_seconds: int = 21600  # 6h — RAG answers are expensive to recompute
+
+    # SEC EDGAR requires a descriptive User-Agent (name + contact), NOT an API key.
+    # https://www.sec.gov/os/accessing-edgar-data
+    sec_user_agent: str = "StockSage AI research bot (contact: set-me@example.com)"
+
+    # Pinecone — deprecated, kept for optional future swap. Unused by default.
     pinecone_api_key: str | None = None
     pinecone_index_name: str = "stocksage"
 

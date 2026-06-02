@@ -100,6 +100,42 @@ class PriceQuote(BaseModel):
     cached: bool = False
 
 
+# ---------- Filings RAG (plan § 4.6) ----------
+
+
+class FilingCitation(BaseModel):
+    """A single source chunk backing an answer — lets the UI link to evidence."""
+
+    filing_type: str
+    fiscal_year: int | None = None
+    section: str | None = None
+    page: int | None = None
+    source_url: str | None = None
+    snippet: str  # short excerpt of the chunk content
+    distance: float | None = None  # cosine distance; lower = more relevant
+
+
+class FilingAnswer(BaseModel):
+    """A grounded answer to one auto-generated filings question."""
+
+    question: str
+    answer: str
+    citations: list[FilingCitation] = Field(default_factory=list)
+    grounded: bool = True  # False when no relevant chunks were found (answer is a stub)
+
+
+class FilingsResult(BaseModel):
+    """Structured ``filings_data`` returned by the Filings RAG agent."""
+
+    ticker: str
+    market: str
+    company_name: str | None = None
+    answers: list[FilingAnswer] = Field(default_factory=list)
+    chunks_indexed: int = 0  # how many filing chunks exist for this ticker
+    fetched_at: datetime
+    cached: bool = False
+
+
 # ---------- Pagination ----------
 
 

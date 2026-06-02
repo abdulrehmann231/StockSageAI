@@ -199,9 +199,64 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 > Note: two unrelated **pre-existing** test failures (stale after earlier refactors) were also fixed so the full suite runs clean — `tests/test_psx_scraper.py` imported the renamed `_read_52w_range`/`_read_stats` helpers (now `_read_all_stats` + `_extract_52w_range`), and `tests/test_stocks.py` still expected a bare list from `/api/stocks` after that endpoint moved to a paginated `{items, meta}` shape. **Full backend suite: 153 passed, 8 deselected (live).**
 ---
 
-## Phase 4 — Filings RAG Agent ⏳
+## Phase 4 — Filings RAG Agent 🟡
 
-Not started. Per plan § 4.6: SEC EDGAR + PSX annual reports → Pinecone embeddings → grounded Q&A. **Natural home for remaining PSX fundamentals (detailed market cap, EPS history, dividend payouts).**
+**Scaffolded** on `agent/cedar-pulse-y55v`. Runtime agent, vector store, embeddings, REST
+endpoint, and ingestion skeleton are in place and offline-tested; the remaining work is
+real document-text extraction + a live index build. Per plan § 4.6: SEC EDGAR + PSX annual
+reports → embeddings → grounded Q&A. **Natural home for remaining PSX fundamentals (detailed
+market cap, EPS history, dividend payouts).**
+
+### Stack decision — pgvector + local embeddings (zero cost, no API keys)
+
+Replaced the plan's original Pinecone + OpenAI-embeddings choice:
+
+- **Vector DB → pgvector.** Vectors live in Postgres (docker-compose now uses the
+  `pgvector/pgvector:pg16` image; `CREATE EXTENSION vector` runs in the lifespan + test
+  bootstrap). No new service, no account, no free-tier caps. Metadata are real SQL columns,
+  so retrieval **pre-filters** by `ticker` / `filing_type` / `fiscal_year` / `market` in a
+  `WHERE` clause — more expressive than a hosted vector DB's metadata filter, and exact (no
+  ANN approximation) at single-ticker scale.
+- **Embeddings → local `BAAI/bge-small-en-v1.5` (384-dim)** via sentence-transformers, run
+  on CPU. No key, no per-token cost. `services/embeddings.py` degrades to a deterministic
+  hashing embedder when torch/sentence-transformers aren't installed, so the whole pipeline
+  stays testable offline.
+- **No API keys required** to build/ingest/retrieve. SEC EDGAR needs only a descriptive
+  `User-Agent` (`SEC_USER_AGENT`). The grounded-answer LLM step uses the existing
+  `OPENROUTER_API_KEY` and falls back to a deterministic extractive answer when absent.
+
+### What's implemented ✅
+
+- `db/models.py` → `FilingChunk` (pgvector `Vector(384)` column + indexed metadata, composite
+  B-tree on `ticker, filing_type, fiscal_year`).
+- `services/embeddings.py` → local embedder + offline hashing fallback (L2-normalized).
+- `services/vector_store.py` → `upsert_chunks` (idempotent re-ingest), `similarity_search`
+  (pre-filtered cosine top-K), `count_chunks`, optional `ensure_vector_index` (HNSW).
+- `agents/filings_agent.py` → auto-generates the 5 key questions (revenue, margin, debt,
+  risks, outlook), retrieves per question, LLM grounded answer w/ citations + extractive
+  fallback, 6h Redis cache, LangGraph node wrapper, CLI tester.
+- `ingestion/` → `chunking.py` (1000-tok/200-overlap word windows, fully tested),
+  `sec_edgar.py` (key-less EDGAR CIK resolve + filings list + best-effort text fetch),
+  `pipeline.py` (fetch → chunk → embed → upsert; CLI: `python -m ingestion.pipeline AAPL GLOBAL`).
+- `api/filings.py` → `GET /api/filings/{ticker}` (`?refresh=true` bypasses cache; 404 unknown
+  ticker, 502 on failure; `chunks_indexed=0` is a valid 200 = "not ingested yet"). Registered
+  in `main.py`.
+- `db/schemas.py` → `FilingsResult` / `FilingAnswer` / `FilingCitation`.
+- **Tests:** `test_chunking.py` + `test_embeddings.py` (pure, offline, verified passing here),
+  `test_filings_agent.py` (stubbed store/LLM — empty-index, grounded, extractive-fallback,
+  no-chunks, node wrapper), `test_filings_api.py` (HTTP contract, DB-backed per convention).
+  conftest truncates `filing_chunks` and creates the `vector` extension.
+
+### Remaining for Phase 4 ⏳
+
+- Real EDGAR primary-document text extraction (`sec_edgar.fetch_filing_text` is a TODO stub —
+  strip HTML/iXBRL, optionally LLM-clean) and a PSX annual-report PDF scraper feeding
+  `ingestion.ingest_psx_pdf`.
+- A live one-time index build for the seed tickers, then verify grounded answers end-to-end
+  against a running pgvector + Redis.
+- Weekly Celery refresh job to re-index new filings.
+- Note: full backend suite must run against the `pgvector/pgvector` image now (the `vector`
+  extension is required); the prior `postgres:16-alpine` lacks it.
 
 ---
 

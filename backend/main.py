@@ -17,6 +17,7 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
 from api import auth as auth_router
+from api import filings as filings_router
 from api import news as news_router
 from api import prices as prices_router
 from api import sentiment as sentiment_router
@@ -45,6 +46,8 @@ async def lifespan(app: FastAPI):
 
     async with engine.begin() as conn:
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
+        # pgvector powers the Filings RAG embedding store (filing_chunks.embedding).
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "vector"'))
         await conn.run_sync(Base.metadata.create_all)
 
     logger.info("Database initialized")
@@ -84,6 +87,7 @@ app.include_router(stocks_router.router)
 app.include_router(prices_router.router)
 app.include_router(sentiment_router.router)
 app.include_router(news_router.router)
+app.include_router(filings_router.router)
 
 
 @app.get("/")

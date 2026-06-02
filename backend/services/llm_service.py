@@ -187,6 +187,85 @@ async def analyze_sentiment_posts(
         return None
 
 
+async def answer_from_filings(
+    *,
+    ticker: str,
+    question: str,
+    context_chunks: list[dict[str, Any]],
+) -> str | None:
+    """Answer a question grounded ONLY in the provided filing chunks.
+
+    ``context_chunks`` each carry ``content`` plus citation metadata
+    (``filing_type``, ``fiscal_year``, ``section``, ``page``). The model is
+    instructed to ground every claim in the supplied text and to say so when the
+    context is insufficient — no outside knowledge, no hallucinated figures.
+
+    Returns ``None`` when no API key is configured or the call fails, so the agent
+    can fall back to a deterministic extractive answer.
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key or not context_chunks:
+        return None
+
+    prompt = (
+        "You are StockSage AI's Filings RAG Agent. Answer the question about "
+        f"{ticker} using ONLY the filing excerpts below. Ground every statement in "
+        "the excerpts and cite the filing type, fiscal year, and page when you use "
+        "a fact, e.g. (10-K FY2023, p.42). If the excerpts do not contain enough "
+        "information to answer, say so plainly instead of guessing. Do not use "
+        "outside knowledge or invent numbers. Keep the answer to 3-5 sentences.\n\n"
+        f"Question: {question}\n\n"
+        f"Filing excerpts:\n{json.dumps(context_chunks, ensure_ascii=True, default=str)}"
+    )
+
+    client = AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+    messages = [
+        {
+            "role": "system",
+            "content": "You answer strictly from provided source text and cite it.",
+        },
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        response = await _create_text_completion(
+            client,
+            messages,
+            model_chain=_news_model_chain(),
+            max_tokens=500,
+        )
+        if not response.choices or response.choices[0].message is None:
+            raise ValueError("LLM response did not contain a message")
+        return (response.choices[0].message.content or "").strip() or None
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Filings LLM answer failed; using extractive fallback: %s", exc)
+        return None
+
+
+async def _create_text_completion(
+    client: AsyncOpenAI,
+    messages: list[dict[str, str]],
+    *,
+    model_chain: list[str],
+    max_tokens: int,
+) -> Any:
+    """Like :func:`_create_completion` but for free-text (non-JSON) answers."""
+    last_error: Exception | None = None
+    for model in model_chain:
+        try:
+            return await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0,
+                max_tokens=max_tokens,
+                timeout=25,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("LLM model %s failed: %s", model, exc)
+            last_error = exc
+    raise last_error or RuntimeError("No LLM models configured")
+
+
 def _news_model_chain() -> list[str]:
     model_chain = [MODELS["news_agent"]]
     model_chain.extend(m for m in NEWS_AGENT_FALLBACK_MODELS if m not in model_chain)

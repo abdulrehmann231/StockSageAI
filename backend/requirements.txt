@@ -44,7 +44,20 @@ openai==1.54.3
 anthropic==0.39.0
 
 # --- Vector DB ---
-pinecone-client==5.0.1
+# Filings RAG uses pgvector (Postgres extension) + local embeddings — zero external
+# cost, no API keys. pinecone-client is retained only for an optional future swap;
+# nothing in the codebase imports it anymore.
+pgvector==0.3.6
+# pinecone-client==5.0.1  # deprecated in favor of pgvector
+
+# --- Embeddings (local, free, no API key) ---
+# bge-small-en-v1.5 runs on CPU via sentence-transformers. Heavy (pulls torch);
+# the embeddings service degrades to a deterministic hashing embedder when this
+# import is unavailable, so tests and lightweight installs still work.
+sentence-transformers==3.3.1
+
+# --- PDF parsing (filings ingestion) ---
+pypdf==5.1.0
 
 # --- Reddit ---
 praw==7.7.1

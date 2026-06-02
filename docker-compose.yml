@@ -1,6 +1,9 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector ships Postgres 16 with the `vector` extension preinstalled
+    # (drop-in replacement for postgres:16). Powers the Filings RAG agent's
+    # embedding store — see backend/services/vector_store.py.
+    image: pgvector/pgvector:pg16
     container_name: stocksage-postgres
     restart: unless-stopped
     environment:
