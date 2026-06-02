@@ -60,24 +60,38 @@ def no_llm(monkeypatch):
     monkeypatch.setattr(sentiment_agent.llm_service, "analyze_sentiment_posts", _none)
 
 
-def _stub_sources(monkeypatch, *, reddit=None, stocktwits=None, reddit_exc=None, stocktwits_exc=None):
-    """Replace the agent's source fetchers with deterministic stubs."""
-    calls = {"reddit": 0, "stocktwits": 0}
+def _stub_sources(
+    monkeypatch,
+    *,
+    reddit=None,
+    stocktwits=None,
+    telegram=None,
+    x=None,
+    reddit_exc=None,
+    stocktwits_exc=None,
+    telegram_exc=None,
+    x_exc=None,
+):
+    """Replace the agent's source fetchers with deterministic stubs.
 
-    async def _reddit(ticker, market, company_name):
-        calls["reddit"] += 1
-        if reddit_exc is not None:
-            raise reddit_exc
-        return list(reddit or [])
+    All four sources (reddit, stocktwits, telegram, x) are stubbed so the suite
+    stays fully offline regardless of which market routing is exercised.
+    """
+    calls = {"reddit": 0, "stocktwits": 0, "telegram": 0, "x": 0}
 
-    async def _stocktwits(ticker, market, company_name):
-        calls["stocktwits"] += 1
-        if stocktwits_exc is not None:
-            raise stocktwits_exc
-        return list(stocktwits or [])
+    def _make(name, rows, exc):
+        async def _fetch(ticker, market, company_name):
+            calls[name] += 1
+            if exc is not None:
+                raise exc
+            return list(rows or [])
 
-    monkeypatch.setattr(sentiment_agent, "fetch_reddit_sentiment", _reddit)
-    monkeypatch.setattr(sentiment_agent, "fetch_stocktwits_sentiment", _stocktwits)
+        return _fetch
+
+    monkeypatch.setattr(sentiment_agent, "fetch_reddit_sentiment", _make("reddit", reddit, reddit_exc))
+    monkeypatch.setattr(sentiment_agent, "fetch_stocktwits_sentiment", _make("stocktwits", stocktwits, stocktwits_exc))
+    monkeypatch.setattr(sentiment_agent, "fetch_telegram_sentiment", _make("telegram", telegram, telegram_exc))
+    monkeypatch.setattr(sentiment_agent, "fetch_x_sentiment", _make("x", x, x_exc))
     return calls
 
 
@@ -259,7 +273,8 @@ async def test_get_sentiment_aggregates_both_sources_deterministic(no_llm, monke
     assert result.bearish_pct == 33
     assert result.label == "bullish"
     assert set(result.sources) == {"reddit", "stocktwits"}
-    assert calls == {"reddit": 1, "stocktwits": 1}
+    # GLOBAL routing now also hits X (telegram is PSX-only); both empty here.
+    assert calls == {"reddit": 1, "stocktwits": 1, "telegram": 0, "x": 1}
 
 
 @pytest.mark.asyncio
@@ -382,6 +397,51 @@ async def test_psx_market_skips_stocktwits(no_llm, monkeypatch):
     assert calls["reddit"] == 1
     assert calls["stocktwits"] == 0  # not part of the PSX source set
     assert result.sources == ["reddit"]
+
+
+@pytest.mark.asyncio
+async def test_psx_routing_includes_telegram_and_x(no_llm, monkeypatch):
+    tg = _post("ENGRO looking strong, accumulate", source="telegram")
+    xp = _post("$ENGRO breakout incoming", source="x")
+    calls = _stub_sources(
+        monkeypatch, reddit=[BULL_1], telegram=[tg], x=[xp], stocktwits=[BEAR_1]
+    )
+    result = await get_sentiment("ENGRO", "PSX", use_cache=False)
+
+    # PSX routing hits reddit + telegram + x, and never stocktwits.
+    assert calls["reddit"] == 1
+    assert calls["telegram"] == 1
+    assert calls["x"] == 1
+    assert calls["stocktwits"] == 0
+    assert set(result.sources) == {"reddit", "telegram", "x"}
+    assert result.post_count == 3
+
+
+@pytest.mark.asyncio
+async def test_global_routing_includes_x(no_llm, monkeypatch):
+    xp = _post("$AAPL puts printing, overvalued", source="x")
+    calls = _stub_sources(monkeypatch, reddit=[BULL_1], stocktwits=[BEAR_1], x=[xp])
+    result = await get_sentiment("AAPL", "GLOBAL", use_cache=False)
+
+    assert calls["telegram"] == 0  # telegram is PSX-only in routing
+    assert calls["x"] == 1
+    assert set(result.sources) == {"reddit", "stocktwits", "x"}
+    assert result.post_count == 3
+
+
+@pytest.mark.asyncio
+async def test_x_source_failure_is_isolated(no_llm, monkeypatch):
+    _stub_sources(
+        monkeypatch,
+        reddit=[BULL_1],
+        stocktwits=[BEAR_1],
+        x_exc=RuntimeError("nitter down"),
+    )
+    result = await get_sentiment("AAPL", "GLOBAL", use_cache=False)
+    # X blew up but the other sources carry the result.
+    assert result.post_count == 2
+    assert "x" not in result.sources
+    assert any("x:" in e or "x " in e for e in result.errors)
 
 
 @pytest.mark.asyncio

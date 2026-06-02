@@ -17,7 +17,9 @@ from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
 from api import auth as auth_router
+from api import news as news_router
 from api import prices as prices_router
+from api import sentiment as sentiment_router
 from api import stocks as stocks_router
 from core.config import get_settings
 from core.limiter import limiter
@@ -80,6 +82,8 @@ app.add_middleware(
 app.include_router(auth_router.router)
 app.include_router(stocks_router.router)
 app.include_router(prices_router.router)
+app.include_router(sentiment_router.router)
+app.include_router(news_router.router)
 
 
 @app.get("/")

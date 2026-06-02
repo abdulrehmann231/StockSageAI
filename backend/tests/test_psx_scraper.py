@@ -15,13 +15,23 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from scrapers.psx_prices import (
+    _extract_52w_range,
     _parse_range_text,
-    _read_52w_range,
-    _read_stats,
+    _read_all_stats,
     _to_float,
     _to_int,
     fetch_psx_quote,
 )
+
+
+def _read_52w_range(page, ticker):
+    """Compose the current two-step API (read stats, then extract range).
+
+    The scraper used to expose a single ``_read_52w_range(page, ticker)``; it was
+    refactored into ``_read_all_stats`` + ``_extract_52w_range(stats, ticker)``.
+    This local helper preserves the original test intent end-to-end.
+    """
+    return _extract_52w_range(_read_all_stats(page, ticker), ticker)
 
 
 # ---------- Unit tests for helper functions ----------
@@ -127,7 +137,7 @@ class TestReadStats:
         mock_items.nth = mock_nth
         mock_page.locator.return_value = mock_items
 
-        stats = _read_stats(mock_page, "TEST")
+        stats = _read_all_stats(mock_page, "TEST")
         assert "open" in stats
         assert "volume" in stats
 
@@ -137,7 +147,7 @@ class TestReadStats:
         mock_items.count.return_value = 0
         mock_page.locator.return_value = mock_items
 
-        stats = _read_stats(mock_page, "TEST")
+        stats = _read_all_stats(mock_page, "TEST")
         assert stats == {}
 
     def test_logs_warning_on_selector_failure(self):
@@ -145,7 +155,7 @@ class TestReadStats:
         mock_page.locator.return_value.count.side_effect = Exception("Selector not found")
 
         with patch("scrapers.psx_prices.logger") as mock_logger:
-            stats = _read_stats(mock_page, "TEST")
+            stats = _read_all_stats(mock_page, "TEST")
             assert stats == {}
             mock_logger.warning.assert_called()
 
