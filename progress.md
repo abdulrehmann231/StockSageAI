@@ -132,9 +132,9 @@ Completed infrastructure improvements from code review:
 
 ---
 
-## Phase 3 — News + Sentiment Agents 🟡
+## Phase 3 — News + Sentiment Agents ✅
 
-Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for PSX, NewsAPI + Yahoo Finance feed for global, then build Reddit + StockTwits sentiment ingestion.
+Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for PSX, NewsAPI + Yahoo Finance feed for global, then build Reddit + StockTwits sentiment ingestion. Both agents are implemented, exposed over REST, and Redis-cached. Stitching them into a unified report is the Phase 5 orchestrator's job (deferred by design).
 
 ### News Agent ✅
 
@@ -150,6 +150,7 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 - Added recency filtering, near-duplicate removal, source failure isolation, two-sentence summary cleanup, and article relevance safeguards.
 - Added Redis cache support with 30-minute TTL; cache failures do not block fresh news results.
 - Added `backend/test2.py` for local real-world testing across PSX and global tickers.
+- **REST endpoint:** `GET /api/news/{ticker}` (`backend/api/news.py`, registered in `main.py`) — resolves market/company from the stocks table, returns ranked impact-classified articles. `?refresh=true` bypasses the 30m cache; `?limit=` (1–20) caps article count. 404 unknown ticker, 502 on agent failure. Tests in `backend/tests/test_news_api.py` (6, offline/stubbed).
 
 ### Sentiment Agent ✅
 
@@ -185,14 +186,17 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 - Scraping is generally working; when global results are low, it is usually because relevance/quality filters rejected articles, not because sources returned nothing.
 - Redis cache behavior still needs to be tested with Redis running locally or in Docker.
 
-### Remaining In Phase 3
+### Phase 3 — closed out
 
 - ~~Implement Sentiment Agent per plan § 4.7 using Reddit + StockTwits sentiment sources.~~ ✅ Done (see Sentiment Agent section above).
 - ~~PSX sentiment beyond Reddit — Telegram / X scraping per plan § 4.7.~~ ✅ Done via credential-free web scraping (public `t.me/s/` Telegram previews + Nitter/official X), no Telethon required.
 - ~~Wire the Sentiment Agent into an API endpoint.~~ ✅ Done — `GET /api/sentiment/{ticker}`.
-- Wire the **News** agent into an API endpoint (still pending; sentiment is now exposed, news is not).
-- Verify News + Sentiment agents together inside the orchestrator/LangGraph flow (Phase 5).
-- Re-test Redis cache speed once Redis is running.
+- ~~Wire the News agent into an API endpoint.~~ ✅ Done — `GET /api/news/{ticker}`.
+- ~~Re-test Redis cache speed once Redis is running.~~ ✅ Verified end-to-end against a live Redis: first call hits sources, second call served from cache with zero source fetches (both News 30m + Sentiment 2h TTLs).
+
+**Deferred to Phase 5 (by design, not a Phase 3 gap):** stitching News + Sentiment into a single report via the LangGraph orchestrator + Report Writer.
+
+> Note: two unrelated **pre-existing** test failures exist independently of this work and remain open — `tests/test_psx_scraper.py` imports a `_read_52w_range` symbol absent from `scrapers/psx_prices.py`, and `tests/test_stocks.py` still expects a bare list from `/api/stocks` after that endpoint moved to a paginated `{items, meta}` shape.
 ---
 
 ## Phase 4 — Filings RAG Agent ⏳
