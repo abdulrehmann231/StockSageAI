@@ -132,7 +132,7 @@ Completed infrastructure improvements from code review:
 
 ---
 
-## Phase 3 — News + Sentiment Agents ⏳
+## Phase 3 — News + Sentiment Agents 🟡
 
 Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for PSX, NewsAPI + Yahoo Finance feed for global, then build Reddit + StockTwits sentiment ingestion.
 
@@ -151,6 +151,20 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 - Added Redis cache support with 30-minute TTL; cache failures do not block fresh news results.
 - Added `backend/test2.py` for local real-world testing across PSX and global tickers.
 
+### Sentiment Agent ✅
+
+- Implemented `backend/agents/sentiment_agent.py` with a LangGraph-compatible `sentiment_agent(state)` node wrapper (populates `sentiment_data`) plus a local CLI tester (`python -m agents.sentiment_agent AAPL [MARKET] [--company ...] [--no-cache]`).
+- Multi-source gathering with per-source failure isolation:
+  - Global: Reddit (PRAW, read-only) over r/stocks, r/investing, r/wallstreetbets, r/StockMarket + StockTwits free public symbol stream.
+  - PSX: Reddit over r/PakistaniInvestors, r/pakistan. (StockTwits rarely carries PSX symbols; Telegram/X scraping noted as a future add-on.)
+  - New scrapers: `backend/scrapers/reddit_sentiment.py`, `backend/scrapers/stocktwits_sentiment.py`.
+- LLM scoring via OpenRouter (`llm_service.analyze_sentiment_posts`) returns `overall_sentiment` (−1..+1), `bullish_pct`/`bearish_pct`, and top bullish/bearish points. Output is validated/clamped/renormalized (`_coerce_llm_scores`) so bad model output can't poison the pipeline.
+- Deterministic fallback (`_deterministic_score`) scores posts by keyword lexicon + provider labels (StockTwits Bullish/Bearish tag wins) when the LLM is unavailable or returns an unusable payload. Points are backfilled from real posts if the LLM omits them.
+- Result shape matches plan § 4.7: `overall_sentiment`, `bullish_pct`, `bearish_pct`, `top_bullish_points`, `top_bearish_points`, `post_count` (plus `label`, `sources`, `errors`, `fetched_at`, `cached` for consistency with the News Agent).
+- Redis cache with 2h TTL (prefix `sentiment:`), keyed by market+ticker; cache failures never block a fresh fetch.
+- Reddit credentials are optional — the agent simply skips Reddit when `REDDIT_CLIENT_ID`/`REDDIT_CLIENT_SECRET` are unset. Added `reddit_*` fields to `core/config.py` and model-override docs to `.env.example`.
+- **Tests:** `backend/tests/test_sentiment_agent.py` — 32 tests (offline, stubbed sources + LLM) covering classification, deterministic scoring, LLM-payload validation/clamping/renormalization, source aggregation, caching, `use_cache=False` bypass, empty-posts neutral path, source-failure isolation, PSX source routing, dedup, ticker normalization, and the node wrapper. Plus 1 `@pytest.mark.live` StockTwits network test. All green.
+
 ### News Agent Notes
 
 - Global sources can return many articles; the agent intentionally discards low-quality candidates instead of forcing five weak articles into the report.
@@ -159,10 +173,11 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 
 ### Remaining In Phase 3
 
-- Implement Sentiment Agent per plan § 4.7 using Reddit + StockTwits sentiment sources.
-- Run full phase-level integration test after Sentiment Agent is complete.
+- ~~Implement Sentiment Agent per plan § 4.7 using Reddit + StockTwits sentiment sources.~~ ✅ Done (see Sentiment Agent section above).
+- Wire News + Sentiment agents into API endpoints (neither is exposed yet; orchestrator lands in Phase 5).
 - Verify News + Sentiment agents together inside the orchestrator/LangGraph flow.
 - Re-test Redis cache speed once Redis is running.
+- (Future) PSX sentiment beyond Reddit — Telegram (Telethon) / X scraping per plan § 4.7.
 ---
 
 ## Phase 4 — Filings RAG Agent ⏳

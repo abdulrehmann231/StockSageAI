@@ -27,6 +27,10 @@ MODELS = {
         "NEWS_AGENT_MODEL",
         "openrouter/free",
     ),
+    "sentiment_agent": os.getenv(
+        "SENTIMENT_AGENT_MODEL",
+        os.getenv("NEWS_AGENT_MODEL", "openrouter/free"),
+    ),
     "chat": os.getenv("CHAT_MODEL", "google/gemini-2.0-flash-exp:free"),
 }
 
@@ -35,6 +39,17 @@ NEWS_AGENT_FALLBACK_MODELS = [
     for model in os.getenv(
         "NEWS_AGENT_FALLBACK_MODELS",
         "openrouter/free,deepseek/deepseek-v4-flash:free,meta-llama/llama-3.3-70b-instruct:free",
+    ).split(",")
+    if model.strip()
+]
+
+# The sentiment agent reuses the news fallback chain by default but can be
+# overridden independently.
+SENTIMENT_AGENT_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "SENTIMENT_AGENT_FALLBACK_MODELS",
+        ",".join(NEWS_AGENT_FALLBACK_MODELS),
     ).split(",")
     if model.strip()
 ]
@@ -103,9 +118,100 @@ async def analyze_news_articles(
         return None
 
 
-async def _create_news_completion(client: AsyncOpenAI, messages: list[dict[str, str]]) -> Any:
+async def analyze_sentiment_posts(
+    *,
+    ticker: str,
+    market: str,
+    company_name: str | None,
+    posts: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Score crowd sentiment for a batch of social posts.
+
+    Returns a dict shaped like::
+
+        {
+            "overall_sentiment": 0.34,   # float in [-1, 1]
+            "bullish_pct": 67,           # int 0-100
+            "bearish_pct": 33,           # int 0-100
+            "top_bullish_points": [...], # up to 3 short strings
+            "top_bearish_points": [...], # up to 3 short strings
+        }
+
+    Returns ``None`` when no API key is configured or the model call fails, so
+    the caller can fall back to deterministic keyword scoring.
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key or not posts:
+        return None
+
+    prompt = (
+        "You are StockSage AI's Sentiment Agent. Read the following social media "
+        f"posts about {ticker} ({market})"
+        f"{' / ' + company_name if company_name else ''} and gauge the overall "
+        "investor mood.\n"
+        "Score overall_sentiment from -1.0 (very bearish) to +1.0 (very bullish), "
+        "where 0 is neutral/mixed. Estimate the share of clearly bullish vs "
+        "clearly bearish posts as integer percentages that together sum to 100 "
+        "(ignore neutral posts when splitting). Identify up to three distinct "
+        "bullish reasons and up to three distinct bearish concerns, each a short "
+        "specific phrase grounded in the posts — no generic filler.\n"
+        "Some posts carry an explicit author label ('bullish'/'bearish'); weigh "
+        "those but read the text too. Do not invent points that are not supported "
+        "by the posts. If the posts are too thin to judge, return overall_sentiment "
+        "near 0 with empty point lists.\n"
+        "Return strict JSON only with this shape: "
+        '{"overall_sentiment":0.0,"bullish_pct":50,"bearish_pct":50,'
+        '"top_bullish_points":["..."],"top_bearish_points":["..."]}.\n\n'
+        f"Posts:\n{json.dumps(posts, ensure_ascii=True, default=str)}"
+    )
+
+    client = AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+    messages = [
+        {"role": "system", "content": "Return only valid JSON. Do not include markdown."},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        response = await _create_completion(
+            client,
+            messages,
+            model_chain=_sentiment_model_chain(),
+            max_tokens=700,
+        )
+        if not response.choices or response.choices[0].message is None:
+            raise ValueError("LLM response did not contain a message")
+        raw_content = response.choices[0].message.content or "{}"
+        return json.loads(_extract_json_object(raw_content))
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Sentiment LLM analysis failed; using deterministic fallback: %s", exc)
+        return None
+
+
+def _news_model_chain() -> list[str]:
     model_chain = [MODELS["news_agent"]]
-    model_chain.extend(model for model in NEWS_AGENT_FALLBACK_MODELS if model not in model_chain)
+    model_chain.extend(m for m in NEWS_AGENT_FALLBACK_MODELS if m not in model_chain)
+    return model_chain
+
+
+def _sentiment_model_chain() -> list[str]:
+    model_chain = [MODELS["sentiment_agent"]]
+    model_chain.extend(m for m in SENTIMENT_AGENT_FALLBACK_MODELS if m not in model_chain)
+    return model_chain
+
+
+async def _create_news_completion(client: AsyncOpenAI, messages: list[dict[str, str]]) -> Any:
+    return await _create_completion(
+        client, messages, model_chain=_news_model_chain(), max_tokens=900
+    )
+
+
+async def _create_completion(
+    client: AsyncOpenAI,
+    messages: list[dict[str, str]],
+    *,
+    model_chain: list[str],
+    max_tokens: int,
+) -> Any:
     last_error: Exception | None = None
 
     for model in model_chain:
@@ -115,24 +221,24 @@ async def _create_news_completion(client: AsyncOpenAI, messages: list[dict[str, 
                     model=model,
                     messages=messages,
                     temperature=0,
-                    max_tokens=900,
+                    max_tokens=max_tokens,
                     timeout=25,
                     response_format={"type": "json_object"},
                 )
             except Exception as json_mode_exc:  # noqa: BLE001
-                logger.info("News JSON-mode call failed for %s, retrying plain JSON: %s", model, json_mode_exc)
+                logger.info("JSON-mode call failed for %s, retrying plain JSON: %s", model, json_mode_exc)
                 return await client.chat.completions.create(
                     model=model,
                     messages=messages,
                     temperature=0,
-                    max_tokens=900,
+                    max_tokens=max_tokens,
                     timeout=25,
                 )
         except Exception as exc:  # noqa: BLE001
-            logger.info("News LLM model %s failed: %s", model, exc)
+            logger.info("LLM model %s failed: %s", model, exc)
             last_error = exc
 
-    raise last_error or RuntimeError("No News Agent LLM models configured")
+    raise last_error or RuntimeError("No LLM models configured")
 
 
 def _extract_json_object(value: str) -> str:

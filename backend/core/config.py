@@ -51,6 +51,11 @@ class Settings(BaseSettings):
     gemini_api_key: str | None = None
     groq_api_key: str | None = None
 
+    # Reddit (Sentiment Agent — optional; agent skips Reddit when unset)
+    reddit_client_id: str | None = None
+    reddit_client_secret: str | None = None
+    reddit_user_agent: str = "stocksage-ai/0.1 sentiment"
+
     # Pinecone
     pinecone_api_key: str | None = None
     pinecone_index_name: str = "stocksage"
