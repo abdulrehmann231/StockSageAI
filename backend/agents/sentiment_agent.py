@@ -57,6 +57,8 @@ from services import cache_service  # noqa: E402
 from services import llm_service  # noqa: E402
 from scrapers.reddit_sentiment import fetch_reddit_sentiment  # noqa: E402
 from scrapers.stocktwits_sentiment import fetch_stocktwits_sentiment  # noqa: E402
+from scrapers.telegram_sentiment import fetch_telegram_sentiment  # noqa: E402
+from scrapers.x_sentiment import fetch_x_sentiment  # noqa: E402
 
 CACHE_PREFIX = "sentiment:"
 CACHE_TTL_SECONDS = 2 * 60 * 60  # 2 hours
@@ -281,16 +283,23 @@ def _coerce_llm_scores(raw: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _source_fetchers(market: str) -> list[tuple[str, Any, tuple]]:
-    """Return (name, coroutine-fn, args) tuples for the market's sources."""
+    """Return (name, coroutine-fn, args) tuples for the market's sources.
+
+    PSX leans on Reddit (r/PakistaniInvestors) + scraped public Telegram
+    channels, since StockTwits rarely carries PSX symbols. Global uses Reddit +
+    StockTwits. Both add a best-effort X/Twitter source. Telegram and X are
+    credential-free web-scraping sources that degrade to empty on failure.
+    """
     if market == "PSX":
-        # StockTwits rarely covers PSX symbols; Reddit (PakistaniInvestors) is
-        # the practical source today. Telegram/X scraping is a future add-on.
         return [
             ("reddit", fetch_reddit_sentiment, ("PSX",)),
+            ("telegram", fetch_telegram_sentiment, ("PSX",)),
+            ("x", fetch_x_sentiment, ("PSX",)),
         ]
     return [
         ("reddit", fetch_reddit_sentiment, ("GLOBAL",)),
         ("stocktwits", fetch_stocktwits_sentiment, ("GLOBAL",)),
+        ("x", fetch_x_sentiment, ("GLOBAL",)),
     ]
 
 
