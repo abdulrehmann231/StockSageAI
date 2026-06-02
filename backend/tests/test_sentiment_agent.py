@@ -107,6 +107,34 @@ def test_classify_neutral_when_balanced_or_empty():
 
 
 @pytest.mark.parametrize(
+    "text",
+    [
+        "I would rather wait for the next earnings call",  # 'rather' ⊃ 'ath'
+        "the path forward is unclear for this company",     # 'path'   ⊃ 'ath'
+        "glossy marketing but no real numbers",             # 'glossy' ⊃ 'loss'
+        "they dismissed the analyst on the call",           # 'dismissed' ⊃ 'miss'
+        "rugby sponsorship was announced today",            # 'rugby'  ⊃ 'rug'
+    ],
+)
+def test_classify_no_substring_false_positives(text):
+    """Common words must not trip single-word lexicon entries via substring."""
+    assert classify_post(text) == "neutral"
+
+
+def test_classify_death_cross_is_bearish_not_bullish():
+    # Regression: 'death' previously matched the bullish 'ath' token.
+    assert classify_post("death cross forming on the weekly chart") == "bearish"
+
+
+def test_classify_multiword_and_emoji_terms_still_match():
+    # The substring path must still fire for phrases and emoji that never
+    # appear as standalone word tokens.
+    assert classify_post("this is a buy the dip moment") == "bullish"
+    assert classify_post("loading up 🚀🚀") == "bullish"
+    assert classify_post("just hit an all-time high today") == "bullish"
+
+
+@pytest.mark.parametrize(
     "score,expected",
     [(0.5, "bullish"), (0.15, "bullish"), (0.0, "neutral"), (-0.14, "neutral"), (-0.15, "bearish"), (-1.0, "bearish")],
 )

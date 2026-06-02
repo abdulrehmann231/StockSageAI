@@ -99,7 +99,8 @@ BULLISH_TERMS = {
     "undervalued", "breakout", "rally", "rallying", "beat", "beats", "strong",
     "upgrade", "upgraded", "growth", "accumulate", "accumulating", "pump",
     "gains", "rocket", "rockets", "surge", "surging", "outperform", "buy the dip",
-    "all-time high", "ath", "uptrend", "support", "oversold", "🚀", "📈", "💎",
+    "all-time high", "ath", "uptrend", "support", "oversold", "golden cross",
+    "🚀", "📈", "💎",
 }
 
 BEARISH_TERMS = {
@@ -108,7 +109,7 @@ BEARISH_TERMS = {
     "weak", "downgrade", "downgraded", "debt", "bankruptcy", "bankrupt", "loss",
     "losses", "lawsuit", "fraud", "drop", "dropping", "fall", "falling",
     "decline", "declining", "bagholder", "rug", "rugged", "downtrend",
-    "resistance", "overbought", "tank", "tanking", "📉", "🩸",
+    "resistance", "overbought", "tank", "tanking", "death cross", "📉", "🩸",
 }
 
 _WORD_RE = re.compile(r"[a-z0-9\-']+")
@@ -116,6 +117,20 @@ _WORD_RE = re.compile(r"[a-z0-9\-']+")
 
 def _tokenize(text: str) -> list[str]:
     return _WORD_RE.findall(text.lower())
+
+
+def _term_hit(term: str, tokens: set[str], lowered: str) -> bool:
+    """Does ``term`` appear in the post?
+
+    Single plain words are matched exactly against the tokenized post so a
+    lexicon entry like ``"ath"`` can't match inside *death* / *rather*. Only
+    multi-word phrases (``"buy the dip"``) and emoji/non-word entries (``🚀``),
+    which never surface as standalone word tokens, fall back to a substring
+    check.
+    """
+    if " " in term or not term.isalnum():
+        return term in lowered
+    return term in tokens
 
 
 def classify_post(text: str, provider_label: str | None = None) -> str:
@@ -130,8 +145,8 @@ def classify_post(text: str, provider_label: str | None = None) -> str:
     lowered = text.lower()
     tokens = set(_tokenize(text))
 
-    bull = sum(1 for term in BULLISH_TERMS if (term in tokens or term in lowered))
-    bear = sum(1 for term in BEARISH_TERMS if (term in tokens or term in lowered))
+    bull = sum(1 for term in BULLISH_TERMS if _term_hit(term, tokens, lowered))
+    bear = sum(1 for term in BEARISH_TERMS if _term_hit(term, tokens, lowered))
 
     if bull > bear:
         return "bullish"
@@ -296,8 +311,7 @@ async def _gather_posts(
     used_sources: list[str] = []
     for (name, _fn, _args), result in zip(fetchers, results):
         if isinstance(result, Exception):
-            msg = f"{name}: {result}" or repr(result)
-            errors.append(msg)
+            errors.append(f"{name}: {result}")
             logger.info("Sentiment source %s failed for %s: %s", name, ticker, result)
             continue
         if result:

@@ -75,6 +75,11 @@ def _normalize(message: dict[str, Any]) -> dict[str, Any] | None:
         "author": user.get("username"),
         "url": None,
         "label": _extract_label(message),
+        # NOTE: `score` is a per-source relevance proxy only — here it is the
+        # author's follower count, whereas the Reddit source uses upvote count.
+        # The two are NOT comparable across sources, so consumers should rank
+        # within a source rather than pooling raw scores. Normalizing to a
+        # 0-1 in-source rank is a possible follow-up.
         "score": user.get("followers"),
     }
 
