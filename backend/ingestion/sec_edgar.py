@@ -4,16 +4,17 @@ SEC EDGAR is a FREE, key-less API. It only requires a descriptive ``User-Agent``
 identifying your app + a contact (set ``SEC_USER_AGENT`` in ``.env``); requests
 are rate-limited to ~10/sec. See https://www.sec.gov/os/accessing-edgar-data.
 
-This module is a best-effort scaffold: it resolves a ticker to its CIK and lists
-recent 10-K / 10-Q filings. Full primary-document text extraction (the filing is
-HTML/iXBRL) is stubbed with a clear TODO — wire it to the chunker once you pick a
-parsing strategy (the `.txt` submission, or the primary HTML document via
-BeautifulSoup). Everything degrades gracefully and never raises into the agent.
+This module resolves a ticker to its CIK, lists recent 10-K / 10-Q filings, and
+extracts plain text from the primary HTML/iXBRL document (``fetch_filing_text``).
+``segment_sec_text`` additionally splits a filing into its standard "Item N."
+sections so chunks can be tagged with a ``section`` label for richer citations.
+Everything degrades gracefully and never raises into the agent.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 import httpx
@@ -131,30 +132,105 @@ async def list_recent_filings(
 
 
 async def fetch_filing_text(ref: FilingRef, *, client: httpx.AsyncClient | None = None) -> str:
-    """Download and extract plain text from a filing's primary document.
+    """Download a filing's primary document and return cleaned plain text.
 
-    TODO(phase-4-ingestion): EDGAR primary docs are HTML/iXBRL. Strip tags
-    (BeautifulSoup) and optionally LLM-clean messy sections before chunking.
-    Returning "" here keeps the pipeline runnable while this is wired up.
+    EDGAR primary documents are HTML/iXBRL. We strip script/style/table-markup
+    noise, drop inline-XBRL ``<ix:...>`` machine tags, collapse whitespace, and
+    return readable prose suitable for chunking. Returns ``""`` on any failure so
+    the pipeline treats it as "no text" rather than raising.
     """
     owns_client = client is None
-    client = client or httpx.AsyncClient(timeout=30, headers=_headers())
+    client = client or httpx.AsyncClient(
+        timeout=30, headers=_headers(), follow_redirects=True
+    )
     try:
         resp = await client.get(ref.document_url)
         resp.raise_for_status()
-        html = resp.text
-        try:
-            from bs4 import BeautifulSoup
-
-            soup = BeautifulSoup(html, "lxml")
-            for tag in soup(["script", "style"]):
-                tag.decompose()
-            return soup.get_text(separator=" ")
-        except Exception:  # noqa: BLE001
-            return html
+        return extract_text_from_html(resp.text)
     except Exception as exc:  # noqa: BLE001
         logger.warning("SEC document fetch failed for %s: %s", ref.document_url, exc)
         return ""
     finally:
         if owns_client:
             await client.aclose()
+
+
+def extract_text_from_html(html: str) -> str:
+    """Strip an EDGAR HTML/iXBRL document down to readable prose.
+
+    Pure function (no network) so it is unit-testable. Removes scripts, styles,
+    and hidden iXBRL header blocks; unwraps inline XBRL tags; collapses
+    whitespace. Falls back to a regex tag-strip if BeautifulSoup is unavailable.
+    """
+    if not html:
+        return ""
+    try:
+        import warnings
+
+        from bs4 import BeautifulSoup
+        from bs4 import XMLParsedAsHTMLWarning
+
+        # EDGAR primary docs are iXBRL/XHTML; parsing them with the HTML parser is
+        # intentional (we want the rendered prose), so silence the XML-as-HTML hint.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", XMLParsedAsHTMLWarning)
+            soup = BeautifulSoup(html, "lxml")
+            # Drop non-content nodes. iXBRL hides a machine-readable header in
+            # <ix:header>; the human document lives outside it.
+            for tag in soup(["script", "style", "ix:header"]):
+                tag.decompose()
+            text = soup.get_text(separator=" ")
+    except Exception:  # noqa: BLE001
+        text = re.sub(r"<[^>]+>", " ", html)
+
+    # Normalize entities-as-spaces and collapse whitespace.
+    text = text.replace("\xa0", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+# 10-K / 10-Q item headers → human-friendly section labels. Matched case-
+# insensitively at the start of a line-ish boundary. Order doesn't matter; we
+# locate every occurrence and slice between them.
+_ITEM_SECTIONS: dict[str, str] = {
+    "item 1a": "Risk Factors",
+    "item 1": "Business",
+    "item 2": "Properties",
+    "item 3": "Legal Proceedings",
+    "item 7a": "Quantitative and Qualitative Disclosures About Market Risk",
+    "item 7": "Management's Discussion and Analysis",
+    "item 8": "Financial Statements",
+}
+
+_ITEM_RE = re.compile(r"\bitem\s+(\d+[a-c]?)\b[\.\:\s\-—]", re.IGNORECASE)
+
+
+def segment_sec_text(text: str) -> list[tuple[str | None, str]]:
+    """Split filing prose into ``(section_label, segment_text)`` pairs.
+
+    Best-effort: finds "Item N" markers and slices the text between consecutive
+    markers, labeling each slice with the mapped section name. Text before the
+    first recognized item is returned with a ``None`` label. When no markers are
+    found (e.g. an exhibit), returns the whole text under ``None`` so the caller
+    still chunks it.
+    """
+    if not text:
+        return []
+
+    matches = list(_ITEM_RE.finditer(text))
+    if not matches:
+        return [(None, text)]
+
+    segments: list[tuple[str | None, str]] = []
+    preamble = text[: matches[0].start()].strip()
+    if preamble:
+        segments.append((None, preamble))
+
+    for i, m in enumerate(matches):
+        num = m.group(1).lower()
+        label = _ITEM_SECTIONS.get(f"item {num}", f"Item {num.upper()}")
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        body = text[m.start() : end].strip()
+        if body:
+            segments.append((label, body))
+    return segments

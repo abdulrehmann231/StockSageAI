@@ -199,13 +199,34 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 > Note: two unrelated **pre-existing** test failures (stale after earlier refactors) were also fixed so the full suite runs clean — `tests/test_psx_scraper.py` imported the renamed `_read_52w_range`/`_read_stats` helpers (now `_read_all_stats` + `_extract_52w_range`), and `tests/test_stocks.py` still expected a bare list from `/api/stocks` after that endpoint moved to a paginated `{items, meta}` shape. **Full backend suite: 153 passed, 8 deselected (live).**
 ---
 
-## Phase 4 — Filings RAG Agent 🟡
+## Phase 4 — Filings RAG Agent 🟡 (verified end-to-end)
 
-**Scaffolded** on `agent/cedar-pulse-y55v`. Runtime agent, vector store, embeddings, REST
-endpoint, and ingestion skeleton are in place and offline-tested; the remaining work is
-real document-text extraction + a live index build. Per plan § 4.6: SEC EDGAR + PSX annual
-reports → embeddings → grounded Q&A. **Natural home for remaining PSX fundamentals (detailed
-market cap, EPS history, dividend payouts).**
+**Built and verified live** on `agent/cedar-pulse-y55v`. Runtime agent, vector store,
+embeddings, REST endpoint, and the full ingestion pipeline (real SEC text extraction + PSX
+PDF scraper) are in place. Full suite green and a live index build produces grounded,
+cited answers. Per plan § 4.6: SEC EDGAR + PSX annual reports → embeddings → grounded Q&A.
+**Natural home for remaining PSX fundamentals (detailed market cap, EPS history, dividend
+payouts).**
+
+### Verification (run in-sandbox against native Postgres 16 + pgvector 0.8.2 + Redis)
+
+- **Full suite: `pytest -m "not live"` → 186 passed, 8 deselected.** Up from 153 — adds
+  `test_chunking` (6), `test_embeddings` (7), `test_filings_agent` (5), `test_filings_api`
+  (5), `test_sec_edgar` (5), `test_psx_filings` (5). The `FilingChunk` `Vector(384)` column
+  is created via `Base.metadata.create_all` against the real `vector` extension.
+- **Live end-to-end** (`python -m scripts.verify_filings_e2e AAPL:GLOBAL MSFT:GLOBAL`):
+  fetched real SEC filings → extracted/segmented → chunked (AAPL 47, MSFT 103) → embedded →
+  upserted to pgvector → retrieved → grounded answers with citations (filing type, fiscal
+  year, **section** label, page).
+- **Pre-filter isolation confirmed:** a similarity query scoped to `AAPL` returns only AAPL
+  chunks though MSFT's 103 chunks live in the same table — the SQL `WHERE ticker = …`
+  pre-filter in `vector_store.similarity_search` is exact.
+- **Caveat (sandbox only):** torch/sentence-transformers didn't fit the 5 GB sandbox disk,
+  so this run used the deterministic **hashing-embedder fallback** — retrieval plumbing is
+  correct but semantic ranking is weak (e.g. a "revenue" question matched a Risk Factors
+  chunk). Running locally with `BAAI/bge-small-en-v1.5` installed (and an
+  `OPENROUTER_API_KEY` for synthesized rather than extractive answers) gives production-
+  quality results; no code change needed — `embeddings.using_real_model()` switches paths.
 
 ### Stack decision — pgvector + local embeddings (zero cost, no API keys)
 
@@ -247,16 +268,34 @@ Replaced the plan's original Pinecone + OpenAI-embeddings choice:
   no-chunks, node wrapper), `test_filings_api.py` (HTTP contract, DB-backed per convention).
   conftest truncates `filing_chunks` and creates the `vector` extension.
 
+### Done since the scaffold ✅
+
+- **Real EDGAR text extraction** — `sec_edgar.fetch_filing_text` now downloads the primary
+  HTML/iXBRL doc and returns cleaned prose (`extract_text_from_html`: strips script/style/
+  `ix:header`, unwraps inline-XBRL, collapses whitespace; silences the XML-as-HTML hint).
+  `segment_sec_text` splits filings on `Item N.` headers into labeled sections (Business,
+  Risk Factors, MD&A, …) so chunks carry a `section` for richer citations.
+- **PSX annual-report PDF scraper** — `scrapers/psx_filings.py`: best-effort discovery of
+  report PDF links from the PSX company page (`parse_report_links` + year heuristics),
+  `download_pdf` (validates `%PDF`/content-type), `extract_pdf_pages` (pypdf, per-page,
+  skips empty/scanned pages), and `fetch_psx_filing_pages` end-to-end. Degrades to `[]` on
+  any failure, matching the other scrapers.
+- **Pipeline wiring** — `ingestion/pipeline.py`: `ingest_global_ticker` (section-tagged SEC
+  chunks), `ingest_psx_ticker` (auto-discovery) and `ingest_psx_pdf` (local file), with a CLI.
+- **`scripts/verify_filings_e2e.py`** — reusable live smoke test (used for the verification
+  above).
+
 ### Remaining for Phase 4 ⏳
 
-- Real EDGAR primary-document text extraction (`sec_edgar.fetch_filing_text` is a TODO stub —
-  strip HTML/iXBRL, optionally LLM-clean) and a PSX annual-report PDF scraper feeding
-  `ingestion.ingest_psx_pdf`.
-- A live one-time index build for the seed tickers, then verify grounded answers end-to-end
-  against a running pgvector + Redis.
+- Run a real index build **with bge-small embeddings + OpenRouter key** locally to confirm
+  semantic answer quality (sandbox used the hashing fallback — see caveat above).
+- PSX discovery is heuristic and may miss JS-rendered links on some company pages; validate
+  against a handful of KSE-100 tickers and adjust selectors / add a Playwright fallback if
+  needed. (Local PDF ingestion via `--pdf` already works regardless.)
 - Weekly Celery refresh job to re-index new filings.
-- Note: full backend suite must run against the `pgvector/pgvector` image now (the `vector`
-  extension is required); the prior `postgres:16-alpine` lacks it.
+- Infra note: the suite needs a Postgres with the `vector` extension — either the
+  `pgvector/pgvector:pg16` compose image or a native install of `postgresql-16-pgvector`.
+  Plain `postgres:16-alpine` lacks it.
 
 ---
 
