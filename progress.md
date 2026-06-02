@@ -196,7 +196,7 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 
 **Deferred to Phase 5 (by design, not a Phase 3 gap):** stitching News + Sentiment into a single report via the LangGraph orchestrator + Report Writer.
 
-> Note: two unrelated **pre-existing** test failures exist independently of this work and remain open — `tests/test_psx_scraper.py` imports a `_read_52w_range` symbol absent from `scrapers/psx_prices.py`, and `tests/test_stocks.py` still expects a bare list from `/api/stocks` after that endpoint moved to a paginated `{items, meta}` shape.
+> Note: two unrelated **pre-existing** test failures (stale after earlier refactors) were also fixed so the full suite runs clean — `tests/test_psx_scraper.py` imported the renamed `_read_52w_range`/`_read_stats` helpers (now `_read_all_stats` + `_extract_52w_range`), and `tests/test_stocks.py` still expected a bare list from `/api/stocks` after that endpoint moved to a paginated `{items, meta}` shape. **Full backend suite: 153 passed, 8 deselected (live).**
 ---
 
 ## Phase 4 — Filings RAG Agent ⏳
