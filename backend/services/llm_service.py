@@ -31,6 +31,10 @@ MODELS = {
         "SENTIMENT_AGENT_MODEL",
         os.getenv("NEWS_AGENT_MODEL", "openrouter/free"),
     ),
+    "report_agent": os.getenv(
+        "REPORT_AGENT_MODEL",
+        os.getenv("NEWS_AGENT_MODEL", "openrouter/free"),
+    ),
     "chat": os.getenv("CHAT_MODEL", "google/gemini-2.0-flash-exp:free"),
 }
 
@@ -49,6 +53,18 @@ SENTIMENT_AGENT_FALLBACK_MODELS = [
     model.strip()
     for model in os.getenv(
         "SENTIMENT_AGENT_FALLBACK_MODELS",
+        ",".join(NEWS_AGENT_FALLBACK_MODELS),
+    ).split(",")
+    if model.strip()
+]
+
+# The report writer is the synthesiser layered on top of price/news/sentiment.
+# Defaults to the news fallback chain; can be overridden when we want a stronger
+# model just for the synthesis step.
+REPORT_AGENT_FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "REPORT_AGENT_FALLBACK_MODELS",
         ",".join(NEWS_AGENT_FALLBACK_MODELS),
     ).split(",")
     if model.strip()
@@ -199,6 +215,81 @@ def _sentiment_model_chain() -> list[str]:
     return model_chain
 
 
+def _report_model_chain() -> list[str]:
+    model_chain = [MODELS["report_agent"]]
+    model_chain.extend(m for m in REPORT_AGENT_FALLBACK_MODELS if m not in model_chain)
+    return model_chain
+
+
+async def synthesize_report(*, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Synthesize a Phase 5 ``StockReport`` from condensed agent signals.
+
+    ``payload`` is the small JSON-safe dict produced by
+    ``agents.report_writer._llm_input_payload``. Returns the parsed model
+    response dict (with the chosen model echoed under ``_model``) or ``None``
+    when no API key is configured / the LLM is unavailable, so the caller can
+    fall back to the deterministic path.
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+
+    prompt = (
+        "You are StockSage AI's Report Writer. Read the price, news, and "
+        "sentiment signals for a single stock and produce a short, grounded "
+        "analyst-style report.\n"
+        "Follow these rules strictly:\n"
+        "- Base every claim on the provided JSON; never invent prices, "
+        "headlines, or sentiment moves that are not in the input.\n"
+        "- Pick the verdict from this allowed set ONLY: BUY, ACCUMULATE, HOLD, "
+        "REDUCE, SELL. Use HOLD when signals conflict or are too thin.\n"
+        "- Set confidence to one of: low, medium, high. Use 'low' when only one "
+        "signal channel is present; 'high' only when price, news, AND sentiment "
+        "all point the same way.\n"
+        "- executive_summary must be 2-4 sentences, plain prose, no bullets, no "
+        "headings. State the verdict reasoning, not the verdict label alone.\n"
+        "- price_summary, news_summary, sentiment_summary: 1-3 short sentences "
+        "each, grounded in the matching JSON block; omit (use empty string) if "
+        "the block is missing.\n"
+        "- risks and opportunities: arrays of up to 4 short bullet strings. Risks "
+        "should reflect actual negative items from the input (negative articles, "
+        "bearish posts, drawdowns, delisting flags). Opportunities are the "
+        "positive counterpart. No generic filler.\n"
+        "- The 'suggested_verdict' field is a deterministic baseline; you may "
+        "agree with it or override it, but disagree only when the news/sentiment "
+        "text supports a different read.\n"
+        "Return strict JSON only with this exact shape: "
+        '{"verdict":"HOLD","confidence":"low","executive_summary":"...",'
+        '"price_summary":"...","news_summary":"...","sentiment_summary":"...",'
+        '"risks":["..."],"opportunities":["..."]}.\n\n'
+        f"Signals:\n{json.dumps(payload, ensure_ascii=True, default=str)}"
+    )
+
+    client = AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+    messages = [
+        {"role": "system", "content": "Return only valid JSON. Do not include markdown."},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        response, model_used = await _create_completion_with_model(
+            client,
+            messages,
+            model_chain=_report_model_chain(),
+            max_tokens=900,
+        )
+        if not response.choices or response.choices[0].message is None:
+            raise ValueError("LLM response did not contain a message")
+        raw_content = response.choices[0].message.content or "{}"
+        parsed = json.loads(_extract_json_object(raw_content))
+        if isinstance(parsed, dict):
+            parsed["_model"] = model_used
+        return parsed
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Report LLM synthesis failed; using deterministic fallback: %s", exc)
+        return None
+
+
 async def _create_news_completion(client: AsyncOpenAI, messages: list[dict[str, str]]) -> Any:
     return await _create_completion(
         client, messages, model_chain=_news_model_chain(), max_tokens=900
@@ -212,12 +303,30 @@ async def _create_completion(
     model_chain: list[str],
     max_tokens: int,
 ) -> Any:
+    response, _model = await _create_completion_with_model(
+        client, messages, model_chain=model_chain, max_tokens=max_tokens
+    )
+    return response
+
+
+async def _create_completion_with_model(
+    client: AsyncOpenAI,
+    messages: list[dict[str, str]],
+    *,
+    model_chain: list[str],
+    max_tokens: int,
+) -> tuple[Any, str]:
+    """Same as :func:`_create_completion` but also returns the model that won.
+
+    Used by the report writer so the resulting ``StockReport`` can record which
+    model actually answered the request.
+    """
     last_error: Exception | None = None
 
     for model in model_chain:
         try:
             try:
-                return await client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model=model,
                     messages=messages,
                     temperature=0,
@@ -225,15 +334,17 @@ async def _create_completion(
                     timeout=25,
                     response_format={"type": "json_object"},
                 )
+                return response, model
             except Exception as json_mode_exc:  # noqa: BLE001
                 logger.info("JSON-mode call failed for %s, retrying plain JSON: %s", model, json_mode_exc)
-                return await client.chat.completions.create(
+                response = await client.chat.completions.create(
                     model=model,
                     messages=messages,
                     temperature=0,
                     max_tokens=max_tokens,
                     timeout=25,
                 )
+                return response, model
         except Exception as exc:  # noqa: BLE001
             logger.info("LLM model %s failed: %s", model, exc)
             last_error = exc
