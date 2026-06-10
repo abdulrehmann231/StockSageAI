@@ -128,7 +128,23 @@ def _read_all_stats(page: Page, ticker: str) -> dict[str, str]:
     The PSX page has multiple sections (Quote, Equity Profile, etc.)
     all using the same stats_item structure. This function collects
     all of them into a single dictionary.
+
+    Includes retry logic: if first attempt returns empty/partial results,
+    waits briefly and retries to handle async JS rendering delays.
     """
+    out = _read_all_stats_attempt(page, ticker)
+
+    # If we got very few results, retry after a short wait (page may still be loading)
+    if len(out) < 3:
+        logger.debug("[%s] Only %d stats found, retrying after delay", ticker, len(out))
+        page.wait_for_timeout(2000)
+        out = _read_all_stats_attempt(page, ticker)
+
+    return out
+
+
+def _read_all_stats_attempt(page: Page, ticker: str) -> dict[str, str]:
+    """Single attempt to read all stats_item elements from the page."""
     # Get all stats_item elements on the page (not just in quote__stats)
     items = page.locator(".stats_item")
     try:
@@ -146,8 +162,9 @@ def _read_all_stats(page: Page, ticker: str) -> dict[str, str]:
             label_elem = item.locator(".stats_label").first
             value_elem = item.locator(".stats_value").first
 
-            label = label_elem.text_content(timeout=1_000) or ""
-            value = value_elem.text_content(timeout=1_000) or ""
+            # Use longer timeout (3s) to handle slow rendering
+            label = label_elem.text_content(timeout=3_000) or ""
+            value = value_elem.text_content(timeout=3_000) or ""
 
             normalized = _normalize_label(label)
             if normalized and value.strip():
@@ -186,15 +203,21 @@ def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str
         logger.error("[%s] Timeout loading PSX page", ticker)
         raise ValueError(f"Timeout loading PSX page for {ticker}")
 
-    # Wait for page to fully render
-    page.wait_for_timeout(2000)
-
-    # Wait for price element
+    # Wait for price element first
     try:
         page.wait_for_selector(".quote__close", timeout=timeout_ms)
     except PlaywrightTimeout:
         logger.error("[%s] .quote__close selector not found", ticker)
         raise ValueError(f"PSX page structure error for {ticker}: .quote__close not found")
+
+    # Wait for stats items to load (they appear after the main price section)
+    try:
+        page.wait_for_selector(".stats_item", timeout=min(10_000, timeout_ms))
+    except PlaywrightTimeout:
+        logger.warning("[%s] .stats_item elements not found within timeout - page may not have stats", ticker)
+
+    # Additional wait for any remaining async JS to populate stat values
+    page.wait_for_timeout(1500)
 
     # Extract price
     close_elem = page.locator(".quote__close").first
@@ -206,7 +229,13 @@ def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str
         raise ValueError(f"PSX page returned no price for {ticker}")
 
     # Extract change
-    change_txt = page.locator(".quote__change").first.text_content() or ""
+    try:
+        change_elem = page.locator(".quote__change").first
+        change_elem.wait_for(timeout=3_000)
+        change_txt = change_elem.text_content() or ""
+    except Exception as exc:
+        logger.debug("[%s] Could not read .quote__change: %s", ticker, exc)
+        change_txt = ""
     change_num: float | None = None
     change_pct: float | None = None
 
@@ -276,21 +305,35 @@ def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str
     free_float_shares = None
     free_float_pct = None
 
-    # Iterate through all items again for free float (since dict loses duplicates)
-    try:
-        ff_items = page.locator(".stats_item:has-text('Free Float')").all()
-        for item in ff_items:
-            try:
-                value = item.locator(".stats_value").text_content(timeout=500) or ""
-                value = value.strip()
-                if "%" in value:
-                    free_float_pct = _to_float(value)
-                elif value and not free_float_shares:
-                    free_float_shares = _to_int(value)
-            except:
-                pass
-    except Exception as exc:
-        logger.debug("[%s] Failed to extract free float: %s", ticker, exc)
+    # Try to extract from stats dict first (most reliable)
+    for key in stats:
+        if "free float" in key:
+            value_str = stats[key]
+            if "%" in value_str:
+                free_float_pct = _to_float(value_str)
+            elif not free_float_shares:
+                free_float_shares = _to_int(value_str)
+
+    # If not found in stats, iterate through page items directly
+    if free_float_shares is None and free_float_pct is None:
+        try:
+            ff_items = page.locator(".stats_item").all()
+            for item in ff_items:
+                try:
+                    label_elem = item.locator(".stats_label").first
+                    label = (label_elem.text_content(timeout=1_000) or "").strip().lower()
+                    if "free float" not in label:
+                        continue
+                    value_elem = item.locator(".stats_value").first
+                    value = (value_elem.text_content(timeout=1_000) or "").strip()
+                    if "%" in value:
+                        free_float_pct = _to_float(value)
+                    elif value and not free_float_shares:
+                        free_float_shares = _to_int(value)
+                except Exception:
+                    continue
+        except Exception as exc:
+            logger.debug("[%s] Failed to extract free float from page: %s", ticker, exc)
 
     # EPS - look in stats first, then in page text (Financials table)
     eps = None
@@ -304,13 +347,21 @@ def _scrape_page(page: Page, ticker: str, url: str, timeout_ms: int) -> dict[str
     # If not found in stats, try to extract from page text (Financials section)
     if not eps:
         try:
-            page_text = page.locator("body").text_content()
+            page_text = page.locator("body").text_content() or ""
             # Look for EPS followed by a number (annual EPS in Financials table)
-            eps_match = re.search(r'EPS\s*(\d+\.?\d*)', page_text)
-            if eps_match:
-                eps = _to_float(eps_match.group(1))
-                if eps:
-                    logger.debug("[%s] EPS from page text: %.2f", ticker, eps)
+            # Try multiple patterns for robustness
+            eps_patterns = [
+                r'EPS\s*(?:\(Rs\.\))?\s*(-?\d+\.?\d*)',  # "EPS 5.23" or "EPS (Rs.) 5.23"
+                r'EPS\s*:\s*(-?\d+\.?\d*)',  # "EPS: 5.23"
+                r'Earnings\s*Per\s*Share\s*(-?\d+\.?\d*)',  # "Earnings Per Share 5.23"
+            ]
+            for pattern in eps_patterns:
+                eps_match = re.search(pattern, page_text, re.IGNORECASE)
+                if eps_match:
+                    eps = _to_float(eps_match.group(1))
+                    if eps is not None:
+                        logger.debug("[%s] EPS from page text: %.2f", ticker, eps)
+                        break
         except Exception as exc:
             logger.debug("[%s] Failed to extract EPS from page text: %s", ticker, exc)
 
