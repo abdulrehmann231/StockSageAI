@@ -7,6 +7,7 @@ import { AxiosError } from "axios";
 
 import { PriceCard } from "@/components/PriceCard";
 import { ReportPanel } from "@/components/ReportPanel";
+import { WatchButton } from "@/components/WatchButton";
 import { api } from "@/lib/api";
 import type { Stock } from "@/lib/types";
 
@@ -69,12 +70,15 @@ export default function StockDetailPage() {
             {[stock.sector, stock.industry].filter(Boolean).join(" · ") || "—"}
           </p>
         </div>
-        <Link
-          href="/dashboard"
-          className="text-sm text-muted-foreground underline hover:text-foreground"
-        >
-          ← Back
-        </Link>
+        <div className="flex items-center gap-3">
+          <WatchButton ticker={stock.ticker} />
+          <Link
+            href="/dashboard"
+            className="text-sm text-muted-foreground underline hover:text-foreground"
+          >
+            ← Back
+          </Link>
+        </div>
       </div>
 
       <PriceCard stock={stock} />

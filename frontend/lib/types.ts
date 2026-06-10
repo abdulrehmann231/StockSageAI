@@ -143,3 +143,55 @@ export interface ReportRecord {
 export interface ReportDetail extends ReportRecord {
   report_data: StockReport;
 }
+
+// --------------------------------------------------------------------------- //
+// Phase 6 — Watchlist, Alerts, Chat
+// --------------------------------------------------------------------------- //
+
+export interface WatchlistItem {
+  ticker: string;
+  name: string;
+  market: string;
+  sector: string | null;
+  currency: string | null;
+  added_at: string;
+}
+
+export type AlertType =
+  | "PRICE_DROP"
+  | "PRICE_RISE"
+  | "PRICE_TARGET"
+  | "BIG_NEWS"
+  | "SENTIMENT_SHIFT";
+
+export interface Alert {
+  id: string;
+  ticker: string;
+  alert_type: AlertType;
+  condition: Record<string, unknown>;
+  is_active: boolean;
+  cooldown_hours: number;
+  last_triggered: string | null;
+  created_at: string;
+}
+
+export interface AlertCreateRequest {
+  ticker: string;
+  alert_type: AlertType;
+  condition: Record<string, unknown>;
+  cooldown_hours?: number;
+}
+
+export type ChatRole = "user" | "assistant";
+
+export interface ChatMessage {
+  id: string;
+  role: ChatRole;
+  content: string;
+  created_at: string;
+}
+
+export interface ChatTurn {
+  user_message: ChatMessage;
+  assistant_message: ChatMessage;
+}

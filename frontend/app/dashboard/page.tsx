@@ -2,6 +2,7 @@
 
 import { RecentReports } from "@/components/RecentReports";
 import { SearchBar } from "@/components/SearchBar";
+import { WatchlistWidget } from "@/components/WatchlistWidget";
 import { useAuth } from "@/lib/auth-context";
 
 export default function DashboardPage() {
@@ -24,12 +25,7 @@ export default function DashboardPage() {
 
       <section className="grid gap-4 sm:grid-cols-2">
         <RecentReports />
-        <div className="rounded-lg border border-border bg-muted/30 p-5">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Watchlist
-          </h2>
-          <p className="mt-2 text-sm">Empty — coming in Phase 6.</p>
-        </div>
+        <WatchlistWidget />
       </section>
     </div>
   );

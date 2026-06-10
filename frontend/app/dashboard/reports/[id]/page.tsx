@@ -5,6 +5,7 @@ import Link from "next/link";
 import { notFound, useParams } from "next/navigation";
 import { AxiosError } from "axios";
 
+import { ChatPanel } from "@/components/ChatPanel";
 import { ReportView } from "@/components/ReportView";
 import { api } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
@@ -79,6 +80,8 @@ export default function ReportDetailPage() {
       </div>
 
       <ReportView report={record.report_data} />
+
+      <ChatPanel reportId={record.id} />
     </div>
   );
 }

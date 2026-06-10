@@ -19,6 +19,12 @@ export function Header() {
           <Link href="/dashboard/reports" className="text-muted-foreground hover:text-foreground">
             Reports
           </Link>
+          <Link href="/dashboard/watchlist" className="text-muted-foreground hover:text-foreground">
+            Watchlist
+          </Link>
+          <Link href="/dashboard/alerts" className="text-muted-foreground hover:text-foreground">
+            Alerts
+          </Link>
           <div className="flex items-center gap-3">
             <span className="text-muted-foreground">
               {user?.full_name || user?.email}
