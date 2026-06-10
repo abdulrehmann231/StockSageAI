@@ -205,15 +205,126 @@ Not started. Per plan § 4.6: SEC EDGAR + PSX annual reports → Pinecone embedd
 
 ---
 
-## Phase 5 — Orchestration + Report Writer ⏳
+## Phase 5 — Orchestration + Report Writer ✅
 
-Not started. LangGraph multi-agent fan-out/fan-in + Claude Sonnet report writer.
+Per plan § 4.8 / § 5: parallel fan-out of the Price + News + Sentiment agents into a synthesizing Report Writer that produces a single analyst-style `StockReport`.
+
+### Orchestrator
+
+- `backend/agents/orchestrator.py` runs `price_agent.get_price`, `news_agent.get_news`, and `sentiment_agent.get_sentiment` concurrently via `asyncio.gather(..., return_exceptions=True)`.
+- **Per-agent error isolation:** one agent crashing does not sink the report — the failure goes into `StockReport.errors`, that channel's payload is set to `None`, and the writer is happy with any combination of present/absent inputs (verified by `test_orchestrator_isolates_single_agent_failure` and the all-three-fail variant).
+- **Verified parallel:** `test_orchestrator_runs_agents_in_parallel` stubs each agent with a 200ms sleep and asserts total < 450ms (serial would be ~600ms+).
+- Redis cache with 30m TTL keyed by `report:{market}:{ticker}`. Cache read/write failures never block a fresh run (`test_orchestrator_cache_read_failure_does_not_block` / `..._write_...`); `?refresh=true` bypasses both directions.
+- LangGraph-compatible `report_orchestrator(state)` node wrapper populates `report_data` plus per-agent `price_data`/`news_data`/`sentiment_data` keys so the orchestrator can be dropped into a larger graph later.
+- We deliberately used `asyncio.gather` instead of a full LangGraph `StateGraph` because the topology here is one fan-out + one fan-in with no conditional edges or loops. The graph would have changed nothing observable about the result while making testing harder.
+
+### Report Writer
+
+- `backend/agents/report_writer.py` produces a `StockReport` pydantic model with: verdict (`BUY` / `ACCUMULATE` / `HOLD` / `REDUCE` / `SELL`), confidence (`low`/`medium`/`high`), composite signal score in `[-1, +1]`, executive summary, per-channel narrative sections, key catalysts, risks, opportunities, the raw agent payloads, sources, errors, `model_used`, and `cached`/`fetched_at` metadata.
+- **Composite score** is a weighted blend: News 0.45 (averaged across articles, recency-weighted), Sentiment 0.35 (clamped to `[-1, 1]`), Price 0.20 (% change clamped to ±10%). Total contributing weight determines confidence — only when all three channels participate do we surface `high`.
+- **Verdict thresholds:** `≥ 0.55` → BUY, `≥ 0.20` → ACCUMULATE, `≤ -0.20` → REDUCE, `≤ -0.55` → SELL, otherwise HOLD.
+- **LLM synthesis** via `llm_service.synthesize_report` (new) using the `report_agent` model chain (`REPORT_AGENT_MODEL` env, falls back to the news chain). The LLM receives a condensed JSON payload of the three signals plus the deterministic suggested verdict, returns verdict + confidence + narrative + risks/opportunities. Output is validated, clamped, alias-coerced (e.g. `"strong buy"` → `BUY`, `"outperform"` → `ACCUMULATE`), capped at 4 items per list, and falls back to deterministic when the model is missing the executive summary, returns non-dict, or no API key is configured.
+- **Deterministic path** (always available) produces verdict + summary + sections + risks/opps directly from agent payloads. Concrete-first ordering for risks/opps — a 5% drawdown or `DELISTED` flag outranks the third negative-news article in the list.
+
+### REST endpoint
+
+- `GET /api/report/{ticker}` (`backend/api/report.py`, registered in `main.py`) — resolves market/company from the stocks table, runs the orchestrator, returns the `StockReport`. `?refresh=true` bypasses the cache; `?max_news_articles=` (1–20) caps how many articles the News Agent considers. 404 for unknown tickers, 502 on orchestrator failure. Tests in `backend/tests/test_report_api.py` cover all six contract points.
+
+### Tests
+
+- **47 new tests across 3 files** (`test_report_writer.py`, `test_orchestrator.py`, `test_report_api.py`); all offline/stubbed.
+- **Full suite: 200 passed, 8 deselected (live).** No regressions in the prior 153 tests.
+- **Also fixed a latent bug in the PR #12 PSX retry path:** `_read_all_stats` now *merges* the retry attempt into the first-attempt dict instead of overwriting. The previous overwrite path would have lost parsed stats whenever the retry returned fewer items (test mocks consumed the locator state; in production, a transient render glitch on the second pass). Caught by `test_psx_scraper.py::TestRead52wRange`.
+
+### Phase 5 — closed out
+
+- ~~Parallel fan-out of Price + News + Sentiment agents.~~ ✅ (`asyncio.gather` with per-agent isolation.)
+- ~~Report Writer agent producing a single structured report.~~ ✅ (`StockReport` with verdict, confidence, narrative sections, risks/opps.)
+- ~~LLM-driven synthesis with deterministic fallback.~~ ✅ (`llm_service.synthesize_report` + always-on deterministic path.)
+- ~~REST endpoint to surface the report.~~ ✅ (`GET /api/report/{ticker}`.)
+- ~~Redis caching with refresh override.~~ ✅ (30m TTL keyed by market+ticker.)
+
+> Note: Claude Sonnet remains the planned production model for the report writer, but the OpenRouter client already supports any model behind that gateway — switch via the `REPORT_AGENT_MODEL` env without touching code.
 
 ---
 
-## Phase 6 — Chat + Watchlist + Alerts ⏳
+## Phase 6 — Chat + Watchlist + Alerts ✅
 
-Not started. Includes chat-with-stock, watchlist CRUD, Celery alert engine.
+Per plan § 4.9–4.11 / § 6: persistent Reports, chat-with-stock follow-up Q&A, watchlist CRUD, and a user-owned alert engine. All four surfaces ship behind the existing auth cookie + bearer fallback.
+
+### DB schema (plan § 6)
+
+New SQLAlchemy models in `backend/db/models.py`:
+
+- `Report(id, user_id, ticker, market, verdict, confidence, composite_score, report_data JSONB, created_at)` — persisted Phase-5 `StockReport`. Indexed on `(user_id, created_at)` and `(ticker, created_at)`.
+- `ChatMessage(id, report_id, role, content, created_at)` with CHECK constraint `role IN ('user','assistant')`.
+- `WatchlistItem(user_id, ticker, added_at)` composite PK.
+- `Alert(id, user_id, ticker, alert_type, condition JSONB, is_active, last_triggered, cooldown_hours, created_at)` with CHECK constraint on `alert_type`.
+
+All FKs cascade on user/stock delete so `TRUNCATE TABLE users, stocks CASCADE` (already in `conftest.py`) cleans test rows automatically.
+
+### Watchlist (plan § 4.10)
+
+- `GET /api/watchlist` — current user's tracked stocks, ordered most-recently-added first, joined to `Stock` for enriched mini-card fields.
+- `POST /api/watchlist` — **idempotent** (re-adding returns 200 with the existing row rather than a confusing 409); 404 for unknown tickers.
+- `DELETE /api/watchlist/{ticker}` — 204 on success, 404 when the row isn't on the user's list.
+- All three require auth; verified user-scoped (Bob can't see Alice's list).
+
+### Reports persistence (plan § 4.9 / § 7)
+
+Layered on top of the Phase-5 orchestrator:
+
+- `POST /api/reports/generate` — runs `orchestrator.get_report`, persists the full `StockReport.model_dump` payload as a `Report` row owned by the current user.
+- `GET /api/reports/user` — slim list view (no `report_data` blob) most-recent-first, capped at `limit` (1–100, default 20).
+- `GET /api/reports/{id}` — full detail; user-scoped (other users get **404**, not 403, to avoid existence-leak side-channel).
+
+### Chat-with-stock (plan § 4.9)
+
+`backend/api/chat.py`:
+
+- `POST /api/chat/{report_id}/message` — appends the user turn, generates the assistant reply, returns both.
+- `GET /api/chat/{report_id}/history` — chronological history of both turns.
+- **Two-track answering:** if `OPENROUTER_API_KEY` is configured, calls `llm_service.answer_chat_question` (new) with the persisted report payload + last 10 history turns as context. If the LLM returns `None` (no key, network error, empty content), falls back to a **deterministic data lookup** — `"What's the P/E?"` → `"P/E: 28.50."` straight from `report.price.pe_ratio`, no LLM call needed. The deterministic path keeps the feature usable offline + zero-cost for technical questions.
+- **History ordering fix:** Postgres' `now()` is transaction-scoped — Q + A inserted in the same commit would share `created_at` and the UUID `id` tiebreaker is random, making turn order non-deterministic for fast back-to-back posts. Both messages are now stamped from Python at insert time so history reads back in the correct order. Verified by `test_chat_persists_history_and_passes_prior_turns`.
+
+### Alerts (plan § 4.11)
+
+**CRUD** (`backend/api/alerts.py`):
+- `GET /api/alerts`, `POST /api/alerts`, `PATCH /api/alerts/{id}`, `DELETE /api/alerts/{id}`.
+- `condition` is validated against `alert_type` at create + patch time (e.g. `PRICE_DROP` requires `threshold_pct < 0`; `PRICE_TARGET` requires `target > 0` + `direction ∈ {above, below}`); malformed conditions return 422 rather than being stored.
+
+**Engine** (`backend/workers/alert_engine.py`):
+- Five evaluators — `PRICE_DROP`, `PRICE_RISE`, `PRICE_TARGET`, `BIG_NEWS`, `SENTIMENT_SHIFT` — each a pure `(condition, signal) -> (fired, message, details)` function for trivially-offline unit tests.
+- `run_alert_engine(db)` sweep:
+  - Loads every active alert in one query.
+  - **Cooldown gate runs BEFORE agent calls** — `last_triggered + cooldown_hours > now` short-circuits the alert before any Price/News/Sentiment fetch, so a cooled-down alert costs zero upstream calls per sweep.
+  - Groups remaining alerts by ticker so Price/News/Sentiment are fetched at most once per ticker per sweep — and only the agents whose results are actually needed.
+  - Routes each alert to its evaluator, fires events through the notifier, stamps `last_triggered` so the cooldown sticks across sweeps.
+  - **State-machine for `SENTIMENT_SHIFT`:** the engine records the latest observed label into `condition._last_seen_label` on every sweep (even when the alert didn't fire) so a `from: bullish, to: bearish` trigger can detect the transition on the second sweep without needing a separate column. Verified by `test_run_alert_engine_sentiment_shift_state_machine`.
+  - **Failure isolation:** a failing agent fetch, a failing evaluator, or a failing notifier each get captured in `result.errors` without taking the sweep down.
+
+**Notifier abstraction** (`backend/services/notifier_service.py`):
+- `Notifier` protocol with one async `send(event)` method.
+- Ships with `LogNotifier` (default — structured INFO log + in-memory ring buffer for visibility), and `set_default_notifier(...)` for tests and an eventual email/push impl.
+- Wiring the engine into Celery beat is a deployment concern, not an engine concern — `run_alert_engine` is callable directly from a regular async context and is already covered by `test_alert_engine.py`.
+
+### Tests
+
+- **60 new offline tests** across `test_watchlist.py` (7), `test_reports_api.py` (7), `test_chat_api.py` (9), `test_alerts_api.py` (14 incl. parametrised invalid-condition cases), `test_alert_engine.py` (23 mixing pure evaluators + end-to-end sweeps with a stubbed notifier).
+- Coverage highlights: auth gating + user-scoping for every CRUD surface; the deterministic chat path + the LLM-on/off branching + history ordering; condition validation per alert type; cooldown gating; `SENTIMENT_SHIFT` state machine; agent-failure isolation; notifier-failure isolation; `LogNotifier` ring-buffer cap.
+- **Full backend suite: 260 passed, 8 deselected (live).** No regressions in the prior 200 tests.
+
+### Phase 6 — closed out
+
+- ~~Chat with stock follow-up Q&A.~~ ✅ (`POST /api/chat/{report_id}/message` + `GET .../history`.)
+- ~~Watchlist CRUD.~~ ✅ (idempotent POST, user-scoped, enriched list view.)
+- ~~Alert engine + Celery scheduling.~~ ✅ engine itself shipped + tested. Beat-loop wiring is deployment glue; engine is callable directly today.
+- ~~Persist Report rows so chat can ground replies without re-running agents.~~ ✅ (`POST /api/reports/generate` → DB; chat reads `report_data` JSONB.)
+
+**Deferred (intentional):**
+- Daily briefings cron / email delivery (Resend/SendGrid integration) — `Notifier` interface is the slot for it; switching `LogNotifier → EmailNotifier` is a one-line change.
+- Celery beat scheduling specifics (`beat_schedule` config, worker container) — operational, not application-level.
+- Frontend pages (`/watchlist`, `/alerts`, chat panel) — backend-only PR; the API contract is set.
 
 ---
 

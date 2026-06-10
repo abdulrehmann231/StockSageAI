@@ -130,7 +130,10 @@ def _read_all_stats(page: Page, ticker: str) -> dict[str, str]:
     all of them into a single dictionary.
 
     Includes retry logic: if first attempt returns empty/partial results,
-    waits briefly and retries to handle async JS rendering delays.
+    waits briefly and retries to handle async JS rendering delays. The retry
+    is *merged* into the first-attempt dict — a retry that returns fewer items
+    (e.g. because the page locator state was consumed, or the second pass hit
+    a transient error) never discards the data we already parsed.
     """
     out = _read_all_stats_attempt(page, ticker)
 
@@ -138,7 +141,10 @@ def _read_all_stats(page: Page, ticker: str) -> dict[str, str]:
     if len(out) < 3:
         logger.debug("[%s] Only %d stats found, retrying after delay", ticker, len(out))
         page.wait_for_timeout(2000)
-        out = _read_all_stats_attempt(page, ticker)
+        retry_out = _read_all_stats_attempt(page, ticker)
+        # Preserve first-attempt keys; let the retry fill in anything new.
+        for key, value in retry_out.items():
+            out.setdefault(key, value)
 
     return out
 

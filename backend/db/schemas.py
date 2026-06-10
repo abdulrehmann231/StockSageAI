@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -119,3 +119,142 @@ class PaginatedStocks(BaseModel):
 
     items: list[StockOut]
     meta: PaginationMeta
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6 — Watchlist
+# --------------------------------------------------------------------------- #
+
+
+class WatchlistAddRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=20)
+
+
+class WatchlistItemOut(BaseModel):
+    """Watchlist row with enough stock context for a mini-card."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    ticker: str
+    name: str
+    market: str
+    sector: str | None = None
+    currency: str | None = None
+    added_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6 — Reports persistence
+# --------------------------------------------------------------------------- #
+
+
+class ReportGenerateRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=20)
+    refresh: bool = False
+    max_news_articles: int = Field(default=5, ge=1, le=20)
+
+
+class ReportRecordOut(BaseModel):
+    """Lightweight Report row for list views (no full report_data blob)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    ticker: str
+    market: str
+    verdict: str | None = None
+    confidence: str | None = None
+    composite_score: float | None = None
+    created_at: datetime
+
+
+class ReportDetailOut(ReportRecordOut):
+    """Full record including the persisted ``StockReport`` payload."""
+
+    report_data: dict[str, Any]
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6 — Chat
+# --------------------------------------------------------------------------- #
+
+
+class ChatMessageRequest(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+
+class ChatMessageOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    role: Literal["user", "assistant"]
+    content: str
+    created_at: datetime
+
+
+class ChatTurnOut(BaseModel):
+    """The two messages produced by a single ``POST /chat/{id}/message`` call."""
+
+    user_message: ChatMessageOut
+    assistant_message: ChatMessageOut
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6 — Alerts
+# --------------------------------------------------------------------------- #
+
+
+AlertType = Literal[
+    "PRICE_DROP",
+    "PRICE_RISE",
+    "PRICE_TARGET",
+    "BIG_NEWS",
+    "SENTIMENT_SHIFT",
+]
+
+
+class AlertCreateRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=20)
+    alert_type: AlertType
+    condition: dict[str, Any]
+    cooldown_hours: int = Field(default=24, ge=0, le=24 * 14)
+
+
+class AlertUpdateRequest(BaseModel):
+    is_active: bool | None = None
+    condition: dict[str, Any] | None = None
+    cooldown_hours: int | None = Field(default=None, ge=0, le=24 * 14)
+
+
+class AlertOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    ticker: str
+    alert_type: AlertType
+    condition: dict[str, Any]
+    is_active: bool
+    cooldown_hours: int
+    last_triggered: datetime | None = None
+    created_at: datetime
+
+
+class AlertFiredEvent(BaseModel):
+    """Result of a single alert evaluation that fired (used by the engine)."""
+
+    alert_id: uuid.UUID
+    user_id: uuid.UUID
+    ticker: str
+    alert_type: AlertType
+    message: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    fired_at: datetime
+
+
+class AlertEngineRunResult(BaseModel):
+    """Summary of one engine sweep."""
+
+    scanned: int
+    fired: list[AlertFiredEvent]
+    errors: list[str] = Field(default_factory=list)
+    skipped_cooldown: int = 0
