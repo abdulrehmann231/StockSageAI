@@ -205,9 +205,46 @@ Not started. Per plan § 4.6: SEC EDGAR + PSX annual reports → Pinecone embedd
 
 ---
 
-## Phase 5 — Orchestration + Report Writer ⏳
+## Phase 5 — Orchestration + Report Writer ✅
 
-Not started. LangGraph multi-agent fan-out/fan-in + Claude Sonnet report writer.
+Per plan § 4.8 / § 5: parallel fan-out of the Price + News + Sentiment agents into a synthesizing Report Writer that produces a single analyst-style `StockReport`.
+
+### Orchestrator
+
+- `backend/agents/orchestrator.py` runs `price_agent.get_price`, `news_agent.get_news`, and `sentiment_agent.get_sentiment` concurrently via `asyncio.gather(..., return_exceptions=True)`.
+- **Per-agent error isolation:** one agent crashing does not sink the report — the failure goes into `StockReport.errors`, that channel's payload is set to `None`, and the writer is happy with any combination of present/absent inputs (verified by `test_orchestrator_isolates_single_agent_failure` and the all-three-fail variant).
+- **Verified parallel:** `test_orchestrator_runs_agents_in_parallel` stubs each agent with a 200ms sleep and asserts total < 450ms (serial would be ~600ms+).
+- Redis cache with 30m TTL keyed by `report:{market}:{ticker}`. Cache read/write failures never block a fresh run (`test_orchestrator_cache_read_failure_does_not_block` / `..._write_...`); `?refresh=true` bypasses both directions.
+- LangGraph-compatible `report_orchestrator(state)` node wrapper populates `report_data` plus per-agent `price_data`/`news_data`/`sentiment_data` keys so the orchestrator can be dropped into a larger graph later.
+- We deliberately used `asyncio.gather` instead of a full LangGraph `StateGraph` because the topology here is one fan-out + one fan-in with no conditional edges or loops. The graph would have changed nothing observable about the result while making testing harder.
+
+### Report Writer
+
+- `backend/agents/report_writer.py` produces a `StockReport` pydantic model with: verdict (`BUY` / `ACCUMULATE` / `HOLD` / `REDUCE` / `SELL`), confidence (`low`/`medium`/`high`), composite signal score in `[-1, +1]`, executive summary, per-channel narrative sections, key catalysts, risks, opportunities, the raw agent payloads, sources, errors, `model_used`, and `cached`/`fetched_at` metadata.
+- **Composite score** is a weighted blend: News 0.45 (averaged across articles, recency-weighted), Sentiment 0.35 (clamped to `[-1, 1]`), Price 0.20 (% change clamped to ±10%). Total contributing weight determines confidence — only when all three channels participate do we surface `high`.
+- **Verdict thresholds:** `≥ 0.55` → BUY, `≥ 0.20` → ACCUMULATE, `≤ -0.20` → REDUCE, `≤ -0.55` → SELL, otherwise HOLD.
+- **LLM synthesis** via `llm_service.synthesize_report` (new) using the `report_agent` model chain (`REPORT_AGENT_MODEL` env, falls back to the news chain). The LLM receives a condensed JSON payload of the three signals plus the deterministic suggested verdict, returns verdict + confidence + narrative + risks/opportunities. Output is validated, clamped, alias-coerced (e.g. `"strong buy"` → `BUY`, `"outperform"` → `ACCUMULATE`), capped at 4 items per list, and falls back to deterministic when the model is missing the executive summary, returns non-dict, or no API key is configured.
+- **Deterministic path** (always available) produces verdict + summary + sections + risks/opps directly from agent payloads. Concrete-first ordering for risks/opps — a 5% drawdown or `DELISTED` flag outranks the third negative-news article in the list.
+
+### REST endpoint
+
+- `GET /api/report/{ticker}` (`backend/api/report.py`, registered in `main.py`) — resolves market/company from the stocks table, runs the orchestrator, returns the `StockReport`. `?refresh=true` bypasses the cache; `?max_news_articles=` (1–20) caps how many articles the News Agent considers. 404 for unknown tickers, 502 on orchestrator failure. Tests in `backend/tests/test_report_api.py` cover all six contract points.
+
+### Tests
+
+- **47 new tests across 3 files** (`test_report_writer.py`, `test_orchestrator.py`, `test_report_api.py`); all offline/stubbed.
+- **Full suite: 200 passed, 8 deselected (live).** No regressions in the prior 153 tests.
+- **Also fixed a latent bug in the PR #12 PSX retry path:** `_read_all_stats` now *merges* the retry attempt into the first-attempt dict instead of overwriting. The previous overwrite path would have lost parsed stats whenever the retry returned fewer items (test mocks consumed the locator state; in production, a transient render glitch on the second pass). Caught by `test_psx_scraper.py::TestRead52wRange`.
+
+### Phase 5 — closed out
+
+- ~~Parallel fan-out of Price + News + Sentiment agents.~~ ✅ (`asyncio.gather` with per-agent isolation.)
+- ~~Report Writer agent producing a single structured report.~~ ✅ (`StockReport` with verdict, confidence, narrative sections, risks/opps.)
+- ~~LLM-driven synthesis with deterministic fallback.~~ ✅ (`llm_service.synthesize_report` + always-on deterministic path.)
+- ~~REST endpoint to surface the report.~~ ✅ (`GET /api/report/{ticker}`.)
+- ~~Redis caching with refresh override.~~ ✅ (30m TTL keyed by market+ticker.)
+
+> Note: Claude Sonnet remains the planned production model for the report writer, but the OpenRouter client already supports any model behind that gateway — switch via the `REPORT_AGENT_MODEL` env without touching code.
 
 ---
 
