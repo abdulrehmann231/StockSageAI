@@ -6,6 +6,7 @@ import { notFound, useParams } from "next/navigation";
 import { AxiosError } from "axios";
 
 import { PriceCard } from "@/components/PriceCard";
+import { ReportPanel } from "@/components/ReportPanel";
 import { api } from "@/lib/api";
 import type { Stock } from "@/lib/types";
 
@@ -78,10 +79,7 @@ export default function StockDetailPage() {
 
       <PriceCard stock={stock} />
 
-      <div className="rounded-lg border border-border bg-muted/20 p-4 text-xs text-muted-foreground">
-        Auto-refreshes every 30 seconds. Full multi-agent research report
-        comes in Phase 5.
-      </div>
+      <ReportPanel ticker={stock.ticker} />
     </div>
   );
 }

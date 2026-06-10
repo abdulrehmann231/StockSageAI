@@ -34,6 +34,19 @@ export function formatPercent(value: number | null, digits = 2): string {
   return `${sign}${value.toFixed(digits)}%`;
 }
 
+export function formatDateTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
 export function formatTime(iso: string): string {
   try {
     return new Date(iso).toLocaleTimeString("en-US", {

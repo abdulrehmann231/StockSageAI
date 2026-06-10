@@ -1,5 +1,6 @@
 "use client";
 
+import { RecentReports } from "@/components/RecentReports";
 import { SearchBar } from "@/components/SearchBar";
 import { useAuth } from "@/lib/auth-context";
 
@@ -22,12 +23,7 @@ export default function DashboardPage() {
       </section>
 
       <section className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-lg border border-border bg-muted/30 p-5">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Recent reports
-          </h2>
-          <p className="mt-2 text-sm">No reports yet. Search a stock above.</p>
-        </div>
+        <RecentReports />
         <div className="rounded-lg border border-border bg-muted/30 p-5">
           <h2 className="text-sm font-medium text-muted-foreground">
             Watchlist
