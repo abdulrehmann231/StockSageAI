@@ -1,7 +1,27 @@
 "use client";
 
+import Link from "next/link";
+
 import { SearchBar } from "@/components/SearchBar";
 import { useAuth } from "@/lib/auth-context";
+
+const QUICK_LINKS = [
+  {
+    href: "/dashboard/reports",
+    title: "Reports",
+    description: "View and generate AI research reports.",
+  },
+  {
+    href: "/dashboard/watchlist",
+    title: "Watchlist",
+    description: "Track stocks you're interested in.",
+  },
+  {
+    href: "/dashboard/alerts",
+    title: "Alerts",
+    description: "Set up price, news, and sentiment alerts.",
+  },
+];
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -21,19 +41,17 @@ export default function DashboardPage() {
         <SearchBar />
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-lg border border-border bg-muted/30 p-5">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Recent reports
-          </h2>
-          <p className="mt-2 text-sm">No reports yet. Search a stock above.</p>
-        </div>
-        <div className="rounded-lg border border-border bg-muted/30 p-5">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Watchlist
-          </h2>
-          <p className="mt-2 text-sm">Empty — coming in Phase 6.</p>
-        </div>
+      <section className="grid gap-4 sm:grid-cols-3">
+        {QUICK_LINKS.map((link) => (
+          <Link
+            key={link.href}
+            href={link.href}
+            className="rounded-lg border border-border bg-muted/30 p-5 transition-colors hover:bg-muted/50"
+          >
+            <h2 className="text-sm font-medium">{link.title}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{link.description}</p>
+          </Link>
+        ))}
       </section>
     </div>
   );
