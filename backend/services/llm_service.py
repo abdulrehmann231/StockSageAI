@@ -221,6 +221,94 @@ def _report_model_chain() -> list[str]:
     return model_chain
 
 
+def _chat_model_chain() -> list[str]:
+    model_chain = [MODELS["chat"]]
+    # Chat reuses the report fallback chain because both want a synthesis-style
+    # model rather than the news-analyser tuning.
+    model_chain.extend(m for m in REPORT_AGENT_FALLBACK_MODELS if m not in model_chain)
+    return model_chain
+
+
+async def answer_chat_question(
+    *,
+    question: str,
+    report_payload: dict[str, Any],
+    history: list[dict[str, str]] | None = None,
+) -> str | None:
+    """Answer a chat follow-up grounded in a previously-generated ``StockReport``.
+
+    ``report_payload`` is the JSON-serialised StockReport (i.e.
+    ``StockReport.model_dump(mode="json")``). ``history`` is an optional list of
+    ``{"role": "user"|"assistant", "content": "..."}`` dicts from prior turns.
+
+    Returns ``None`` when no API key is configured / the model call fails, so
+    the caller can fall back to a deterministic data-lookup answer.
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+
+    ticker = report_payload.get("ticker", "the stock")
+    market = report_payload.get("market", "")
+
+    system_prompt = (
+        "You are StockSage AI's stock-chat assistant. Answer the user's "
+        f"question about {ticker} ({market}) using ONLY the report JSON "
+        "context provided below. If the answer is not in the report, say so "
+        "in one short sentence — do not invent numbers, headlines, or "
+        "catalysts. Be concise: 1-4 sentences, plain prose, no headings or "
+        "bullets unless the question explicitly asks for a list. Never use "
+        "markdown asterisks for bold/italic."
+        f"\n\nReport JSON:\n{json.dumps(report_payload, ensure_ascii=True, default=str)}"
+    )
+
+    messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+    if history:
+        for turn in history[-10:]:  # last 10 turns is plenty of context
+            role = turn.get("role")
+            content = turn.get("content")
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+    messages.append({"role": "user", "content": question})
+
+    client = AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+    try:
+        response, _model = await _create_chat_completion(
+            client, messages, model_chain=_chat_model_chain()
+        )
+        if not response.choices or response.choices[0].message is None:
+            raise ValueError("Chat LLM returned no message")
+        text = (response.choices[0].message.content or "").strip()
+        return text or None
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Chat LLM call failed; falling back to deterministic: %s", exc)
+        return None
+
+
+async def _create_chat_completion(
+    client: AsyncOpenAI,
+    messages: list[dict[str, str]],
+    *,
+    model_chain: list[str],
+) -> tuple[Any, str]:
+    """Plain text completion path — chat replies are not JSON-shaped."""
+    last_error: Exception | None = None
+    for model in model_chain:
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                temperature=0.3,
+                max_tokens=400,
+                timeout=25,
+            )
+            return response, model
+        except Exception as exc:  # noqa: BLE001
+            logger.info("Chat LLM model %s failed: %s", model, exc)
+            last_error = exc
+    raise last_error or RuntimeError("No chat models configured")
+
+
 async def synthesize_report(*, payload: dict[str, Any]) -> dict[str, Any] | None:
     """Synthesize a Phase 5 ``StockReport`` from condensed agent signals.
 
