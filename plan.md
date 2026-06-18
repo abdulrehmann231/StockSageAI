@@ -210,9 +210,15 @@ users (
 
 **What it does:** User types ticker or company name, gets autocomplete with market badges.
 
+**Status:** 📝 PLANNED FOR WEEK 2 - Requires stock population script
+
 **Implementation:**
 1. **Pre-populated `stocks` table** with all PSX and major US-listed stocks
+   - TODO: Write script to populate PSX stocks from official listing
+   - TODO: Import S&P 500 / NASDAQ tickers from static dataset
 2. On app load, frontend fetches and caches the stocks list (only metadata, ~5MB)
+   - TODO: Implement `/api/stocks/list` endpoint in backend
+   - TODO: Add client-side caching in Next.js  
 3. Search is client-side fuzzy matching (using `fuse.js`) — instant, no backend hits
 4. Each result shows: ticker, company name, market flag (🇵🇰/🇺🇸), sector
 
@@ -240,6 +246,15 @@ stocks (
 <!-- The heart of StockSageAI: LangGraph-based orchestration parallelizing 5 specialized agents for speed and diverse insights -->
 
 **What it does:** When user requests a report, orchestrator spawns 4 specialized agents in parallel, then a 5th agent synthesizes the output.
+
+**Status:** 🏗️ IN DESIGN - Core architecture finalized, implementation starts Week 3
+
+**Architecture Decision Log:**
+- ✅ DECIDED: Use LangGraph for orchestration (better than LangChain chains for this use case)
+- ✅ DECIDED: Parallel execution pattern (fan-out/fan-in) for speed
+- 📝 TODO: Implement streaming progress to frontend over WebSocket
+- 📝 TODO: Add error handling and retry logic per agent
+- 📝 TODO: Cache agent outputs in Redis to avoid re-runs
 
 **Why this architecture:**
 - **Parallel execution** = Fast (all agents run concurrently, not sequentially)
@@ -306,6 +321,16 @@ def build_research_graph():
 <!-- Speed is critical: this agent runs first, user sees price data within milliseconds -->
 
 **Job:** Fetch live market data fastest, so user sees *something* immediately. Provides the anchor for all downstream analysis.
+
+**Status:** 🔄 IN DESIGN - Data source evaluation in progress
+
+**Development Checklist:**
+- [ ] Integrate `yfinance` for global stocks (Yahoo Finance)
+- [ ] Build Playwright-based PSX scraper for dps.psx.com.pk
+- [ ] Implement Redis caching (60s TTL during market hours, longer after hours)
+- [ ] Add market hours detection (9:30 AM - 3:30 PM PKT for PSX)
+- [ ] Build unit tests for both data sources
+- [ ] Performance benchmark: target < 500ms response time
 
 **Implementation:**
 - **For Global stocks:** Use `yfinance` library
