@@ -4,8 +4,9 @@
 Sets up the application with middleware, routes, and database lifecycle.
 """
 
-import asyncio
-import sys
+import os  # Operating system interface for path and environment operations
+import asyncio  # Async I/O framework for concurrent operations
+import sys  # System-specific parameters and functions
 from contextlib import asynccontextmanager  # Provides utilities for managing async setup/teardown
 
 # Windows compatibility: Use Selector event loop instead of the default ProactorEventLoop
@@ -13,43 +14,47 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Third-party imports
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from sqlalchemy import text
+from fastapi import FastAPI  # Web framework for building APIs
+from fastapi.middleware.cors import CORSMiddleware  # Cross-Origin Resource Sharing middleware
+from slowapi import _rate_limit_exceeded_handler  # Rate limit error handler
+from slowapi.errors import RateLimitExceeded  # Exception raised when rate limit is hit
+from sqlalchemy import text  # Raw SQL execution helper
 
 # API route routers for different features
-from api import alerts as alerts_router
-from api import auth as auth_router
-from api import chat as chat_router
-from api import news as news_router
-from api import prices as prices_router
-from api import report as report_router
-from api import reports as reports_router
-from api import sentiment as sentiment_router
-from api import stocks as stocks_router
-from api import watchlist as watchlist_router
+from api import alerts as alerts_router  # Stock price alert management
+from api import auth as auth_router  # User authentication and authorization
+from api import chat as chat_router  # AI-powered chat/assistant feature
+from api import news as news_router  # Financial news endpoints
+from api import prices as prices_router  # Stock price data endpoints
+from api import report as report_router  # Single stock report generation
+from api import reports as reports_router  # Batch reports endpoint
+from api import sentiment as sentiment_router  # Market sentiment analysis
+from api import stocks as stocks_router  # Stock search and discovery
+from api import watchlist as watchlist_router  # User watchlist management
 
 # Core configuration and utilities
-from core.config import get_settings
-from core.limiter import limiter
-from core.logging import get_logger, setup_logging
-from core.middleware import RequestIdMiddleware
+from core.config import get_settings  # Application settings from environment
+from core.limiter import limiter  # Rate limiting instance
+from core.logging import get_logger, setup_logging  # Structured logging setup
+from core.middleware import RequestIdMiddleware  # Adds unique request IDs to each request
 
 # Database setup
-from db.session import Base, engine
-from services import cache_service
+from db.session import Base, engine  # SQLAlchemy ORM base and engine
+from services import cache_service  # Redis-based caching service
 
 # Initialize logging before anything else
 setup_logging()
+print("📝 Logging system initialized")
 
 # Load application configuration from environment variables
 settings = get_settings()
+print(f"⚙️  Configuration loaded: {settings.app_name}")
+
 logger = get_logger(__name__)
 
 print(f"🚀 Starting {settings.app_name} v0.1.0")
 print(f"🌐 Running on platform: {sys.platform}")
+print(f"🔌 Allowed CORS origins: {settings.cors_origins_list}")
 
 
 @asynccontextmanager
@@ -118,23 +123,36 @@ print("CORS middleware configured")
 
 # Register all API routers
 print("Registering API routers...")
-app.include_router(auth_router.router)
-app.include_router(stocks_router.router)
-app.include_router(prices_router.router)
-app.include_router(sentiment_router.router)
-app.include_router(news_router.router)
-app.include_router(report_router.router)
-app.include_router(reports_router.router)
-app.include_router(chat_router.router)
-app.include_router(watchlist_router.router)
-app.include_router(alerts_router.router)
+app.include_router(auth_router.router)     # /auth/* - login, signup, tokens
+print("  ✅ Auth router registered")
+app.include_router(stocks_router.router)   # /stocks/* - search and stock info
+print("  ✅ Stocks router registered")
+app.include_router(prices_router.router)   # /prices/* - historical and real-time prices
+print("  ✅ Prices router registered")
+app.include_router(sentiment_router.router) # /sentiment/* - market sentiment
+print("  ✅ Sentiment router registered")
+app.include_router(news_router.router)     # /news/* - financial news
+print("  ✅ News router registered")
+app.include_router(report_router.router)   # /report/* - stock report
+print("  ✅ Report router registered")
+app.include_router(reports_router.router)  # /reports/* - batch reports
+print("  ✅ Reports router registered")
+app.include_router(chat_router.router)     # /chat/* - AI assistant
+print("  ✅ Chat router registered")
+app.include_router(watchlist_router.router) # /watchlist/* - user watchlists
+print("  ✅ Watchlist router registered")
+app.include_router(alerts_router.router)   # /alerts/* - price alerts
+print("  ✅ Alerts router registered")
 print("All API routers registered")
 print("✅ Application bootstrapping complete")
 
 
 @app.get("/")
 async def root():
-    """Root endpoint returning app info."""
+    """Root endpoint returning app info.
+    
+    Useful as a quick sanity check - returns app metadata without hitting any dependencies.
+    """
     # Useful as a quick sanity endpoint for reverse proxy and app wiring checks.
     print("Root endpoint hit")
     # Return basic application metadata
@@ -146,6 +164,7 @@ async def health():
     """Basic liveness check endpoint.
     
     Returns 200 if the application is running (doesn't verify dependencies).
+    Used by Docker/Kubernetes liveness probes.
     """
     print("Health check (liveness) requested")
     return {"status": "healthy"}
@@ -189,7 +208,7 @@ async def health_ready():
         checks["redis"] = "unhealthy"
         print(f"❌ Redis check failed: {exc}")
 
-    # Return 503 if any critical dependency is unhealthy
+    # Aggregate results - must have all dependencies healthy
     all_healthy = all(v == "healthy" for v in checks.values())
     # Keep this summary log for quick triage during startup incidents.
     print(f"📋 Readiness summary: {checks}")
@@ -202,5 +221,5 @@ async def health_ready():
             detail={"status": "unhealthy", "checks": checks},
         )
 
-    print("💚 All systems ready")
+    print("💚 All systems ready - server can accept traffic")
     return {"status": "healthy", "checks": checks}
