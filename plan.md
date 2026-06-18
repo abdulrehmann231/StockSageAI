@@ -1226,6 +1226,7 @@ stocksage-ai/
 - **Deliverable:** Production-ready v1
 
 ### Phase 9 — Launch
+<!-- Launch checklist: prioritize portfolio polish and demo over maximizing features -->
 - Deploy production
 - Write portfolio case study
 - Record demo video
@@ -1235,6 +1236,7 @@ stocksage-ai/
 ---
 
 ## 11. Environment Variables
+<!-- Store all env vars in .env files locally, use GitHub Secrets or Railway for deployment -->
 
 ```bash
 # Frontend (.env.local)
@@ -1434,6 +1436,7 @@ Pay $0.02 per report for Claude Sonnet on the Report Writer. It's worth it.
 ---
 
 ## 13. Cost Estimate (Monthly)
+<!-- Most services have generous free tiers — this project can run near $0 during development -->
 
 | Service | Free Tier | Paid (if needed) |
 |---|---|---|
@@ -1495,6 +1498,7 @@ When this project is on the CV, it shows:
 7. **Ability to ship** — actual users using actual app
 
 **Suggested CV bullet points:**
+<!-- Tailor these to specific job descriptions — highlight relevant bullet points -->
 - *Built a production-grade multi-agent AI platform using LangGraph orchestrating 5 specialized agents (news, RAG, sentiment, technical, synthesis) for automated stock research on Pakistani (PSX) and US markets*
 - *Implemented RAG pipeline over 1000+ SEC and PSX annual reports using Pinecone vector DB, enabling natural-language Q&A grounded in source filings*
 - *Designed event-driven backend with FastAPI, Celery, and Redis handling real-time price updates, scheduled scrapers, and alert engine serving 100+ users*
@@ -1516,6 +1520,7 @@ When this project is on the CV, it shows:
 ---
 
 ## 17. Notes for Claude Code (or any AI assistant) Reading This
+<!-- Practical tips for an AI coding agent to build this efficiently — avoids common pitfalls -->
 
 If you're building this in a new chat, here are pointers:
 

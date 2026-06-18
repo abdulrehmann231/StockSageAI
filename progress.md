@@ -1,4 +1,5 @@
 # StockSage AI — Build Progress
+<!-- Auto-generated from plan.md phases — update as each phase ships -->
 
 Living status of every phase in [`plan.md`](./plan.md) § 10. Updated as branches merge to `main`.
 
