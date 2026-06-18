@@ -11,18 +11,20 @@
 ## 1. Project Vision
 
 ### 1.1 The Problem
+<!-- The core insight: Investment research is fragmented and inaccessible for retail investors in Pakistan -->
 Retail investors — especially in Pakistan — lack accessible, AI-powered research tools. Information is scattered across SEC filings, PSX announcements, news sites, social media, and finance Telegram/WhatsApp groups. Most investors either:
-- Rely on unverified tips
-- Spend hours manually researching
-- Use expensive Bloomberg/Reuters terminals (out of reach for most)
+- Rely on unverified tips (risky, no data backing)
+- Spend hours manually researching (inefficient, repetitive work)
+- Use expensive Bloomberg/Reuters terminals (out of reach for most retail investors)
 
 ### 1.2 The Solution
+<!-- StockSageAI automates research end-to-end: data collection → analysis → insight generation -->
 A multi-agent AI system that automatically:
-1. Fetches live price + market data
-2. Reads and summarizes financial filings (RAG)
-3. Aggregates news with sentiment analysis
-4. Scans social sentiment from finance communities
-5. Generates a clean, plain-English investment report with Buy/Hold/Sell verdict
+1. Fetches live price + market data (real-time, cached for performance)
+2. Reads and summarizes financial filings (RAG = Retrieval-Augmented Generation for grounded answers)
+3. Aggregates news with sentiment analysis (context from recent events)
+4. Scans social sentiment from finance communities (crowd intelligence)
+5. Generates a clean, plain-English investment report with Buy/Hold/Sell verdict (LLM-synthesized, not rules-based)
 
 ### 1.3 Dual Market Strategy
 - **Pakistani Market (PSX):** First-class support — KSE-100, all major sectors, PKR pricing, SBP rate context
@@ -30,11 +32,16 @@ A multi-agent AI system that automatically:
 - Unified UI with a market toggle
 
 ### 1.4 Key Differentiator
+<!-- Market positioning: PSX is underserved, creating real user value AND impressive portfolio demonstration -->
 **No existing AI tool seriously supports PSX.** This makes the app genuinely useful in an underserved market while still demonstrating skills relevant to global recruiters.
+- PSX Market = Real, underserved demand (genuine users, not just hobby project)
+- Global Market = Credibility signal (shows you understand NYSE/NASDAQ as well)
+- Combined = Portfolio project that is BOTH useful locally AND internationally impressive
 
 ---
 
 ## 2. High-Level Architecture
+<!-- Architecture follows a clean separation: thin API gateway, intelligent orchestration layer, modular agents, shared data infrastructure -->
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -89,28 +96,31 @@ A multi-agent AI system that automatically:
 ## 3. Tech Stack
 
 ### 3.1 Frontend
-- **Framework:** Next.js 14 (App Router)
-- **Styling:** Tailwind CSS + shadcn/ui
-- **State:** Zustand (lightweight, simpler than Redux)
-- **Data Fetching:** TanStack Query (React Query)
-- **Charts:** Recharts (for price charts and sentiment graphs)
-- **Real-time:** Socket.io-client (for live price updates, agent progress)
-- **Auth:** NextAuth.js with credentials + Google OAuth
+<!-- Modern Next.js stack: App Router for file-based routing, minimal state management, strong UX with real-time updates -->
+- **Framework:** Next.js 14 (App Router for modern file-based routing)
+- **Styling:** Tailwind CSS + shadcn/ui (utility-first, accessible components)
+- **State:** Zustand (lightweight, simpler than Redux for this scale)
+- **Data Fetching:** TanStack Query (React Query for caching, background refetch)
+- **Charts:** Recharts (lightweight, responsive price charts and sentiment visualizations)
+- **Real-time:** Socket.io-client (for live price ticks during market hours, agent progress streaming)
+- **Auth:** NextAuth.js with credentials + Google OAuth (familiar, industry-standard)
 
 ### 3.2 Backend
-- **Framework:** FastAPI (Python 3.11+)
-- **Agent Framework:** LangGraph (built on LangChain) — best for multi-agent orchestration
-- **LLM Provider:** OpenRouter (gives access to GPT-4o, Claude, Gemini, etc. with one API)
-- **Embeddings:** OpenAI text-embedding-3-small (cheap and good)
-- **Background Jobs:** Celery + Redis as broker
-- **WebSockets:** FastAPI WebSocket + Socket.io
-- **Auth:** JWT tokens, bcrypt for hashing
+<!-- FastAPI for performance, LangGraph for sophisticated multi-agent workflows, OpenRouter for model flexibility -->
+- **Framework:** FastAPI (Python 3.11+, async-native, excellent for I/O-bound work)
+- **Agent Framework:** LangGraph (built on LangChain) — best for multi-agent orchestration with state management
+- **LLM Provider:** OpenRouter (single API key → access to GPT-4o, Claude, Gemini, Llama — model flexibility)
+- **Embeddings:** OpenAI text-embedding-3-small (cheap, reliable, 1536-dim vectors for Pinecone)
+- **Background Jobs:** Celery + Redis as broker (distributed task queue for scrapers, alerts, daily jobs)
+- **WebSockets:** FastAPI WebSocket + Socket.io (real-time agent progress, live prices)
+- **Auth:** JWT tokens, bcrypt for hashing (stateless, scalable)
 
 ### 3.3 Databases
-- **PostgreSQL:** Users, watchlists, reports, alerts, cached prices (Supabase for managed hosting)
-- **Pinecone:** Vector DB for SEC filings + PSX annual reports RAG
-- **Redis:** Caching, task queue, real-time price storage, rate limiting
-- **S3-compatible (Cloudflare R2 or Supabase Storage):** Storing scraped PDFs, generated reports
+<!-- Polyglot persistence: each tool for its specific job (relational, vector search, cache, blob storage) -->
+- **PostgreSQL:** Users, watchlists, reports, alerts, cached prices (Supabase for managed hosting, backups, auth)
+- **Pinecone:** Vector DB for SEC filings + PSX annual reports RAG (semantic search for Q&A)
+- **Redis:** Multi-purpose — caching (fast lookups), task queue (Celery), price streams, rate limiting
+- **S3-compatible (Cloudflare R2 or Supabase Storage):** Storing scraped PDFs, generated reports (cheap, durable)
 
 ### 3.4 External APIs & Data Sources
 
@@ -204,8 +214,15 @@ stocks (
 ---
 
 ### 4.3 The Multi-Agent Orchestration System (Core Feature)
+<!-- This is the heart of StockSageAI: LangGraph-based orchestration that parallelizes agent execution for speed and insight diversity -->
 
 **What it does:** When user requests a report, orchestrator spawns 4 specialized agents in parallel, then a 5th agent synthesizes the output.
+
+**Why this architecture:**
+- **Parallel execution** = Fast (all agents run concurrently, not sequentially)
+- **Specialized agents** = Better quality (each agent is an expert at one task)
+- **Composable** = Easy to add new agents (e.g., Technical Analysis Agent, Competitor Analysis)
+- **Debuggable** = Each agent's output is explicit and traceable
 
 **Implementation with LangGraph:**
 
@@ -253,16 +270,19 @@ def build_research_graph():
 8. Final report saved to DB + streamed to user
 
 **Why LangGraph over plain LangChain:**
-- Built for multi-agent workflows
-- Native parallel execution
-- State management is explicit
-- Easy to add new agents later (e.g., Technical Analysis Agent v2)
+<!-- Architecture decision rationale: LangGraph is purpose-built for this kind of workflow -->
+- **Built for multi-agent workflows** — explicit, not a hack on top of chains
+- **Native parallel execution** — agents 1-4 run concurrently, wait at fan-in before agent 5
+- **State management is explicit** — ResearchState TypedDict enforces structure, easy to debug
+- **Easy to add new agents later** — modify graph topology, not legacy code (e.g., add Technical Analysis Agent, Competitor Agent)
+- **Streaming** — progress updates to frontend in real-time as agents complete
 
 ---
 
 ### 4.4 Agent 1 — Price/Market Data Agent
+<!-- Speed is critical: this agent runs first, user sees price data within milliseconds -->
 
-**Job:** Fetch live market data fastest, so user sees *something* immediately.
+**Job:** Fetch live market data fastest, so user sees *something* immediately. Provides the anchor for all downstream analysis.
 
 **Implementation:**
 - **For Global stocks:** Use `yfinance` library
@@ -272,13 +292,15 @@ def build_research_graph():
 
 **File:** `backend/agents/price_agent.py`
 
-**Key Detail:** During PSX market hours (9:30 AM - 3:30 PM PKT), prefer fresh scrape. After hours, use last close.
+**Key Detail:** During PSX market hours (9:30 AM - 3:30 PM PKT), prefer fresh scrape over cached. After hours, use last close from cache (reduces overhead when market is closed and data cannot change).
+**Implementation note:** Use `datetime.now(pytz.timezone('Asia/Karachi'))` to determine time zone correctly.
 
 ---
 
 ### 4.5 Agent 2 — News Agent
+<!-- Context from recent events: what's happening *now* affects short-term price action and sentiment -->
 
-**Job:** Find recent relevant news, summarize, classify impact.
+**Job:** Find recent relevant news, summarize, classify impact. Provides event-driven context for the investment case.
 
 **Implementation:**
 1. **For Global:** Hit NewsAPI + Yahoo Finance news feed for ticker
@@ -295,12 +317,18 @@ def build_research_graph():
 **File:** `backend/agents/news_agent.py`
 
 **Caching:** Cache scraped articles for 30 minutes in Redis to avoid re-scraping on chat follow-ups.
+**Note:** Scraping is expensive (network I/O, parsing), so 30min TTL is a good balance between freshness and performance.
 
 ---
 
 ### 4.6 Agent 3 — Filings RAG Agent (Most Technically Impressive)
+<!-- RAG (Retrieval-Augmented Generation) is the key to credible, cited answers. Facts from actual company documents, not hallucinations. -->
 
-**Job:** Answer questions from actual SEC filings or PSX annual reports.
+**Job:** Answer questions from actual SEC filings or PSX annual reports using RAG (retrieval-augmented generation).
+
+**Why RAG matters:** 
+- Without RAG: LLM might hallucinate financial numbers (dangerous for investment decisions)
+- With RAG: LLM retrieves actual filing chunks, answers based on grounded facts with citations (credible, defensible)
 
 **Implementation — One-time setup:**
 
@@ -331,12 +359,14 @@ def build_research_graph():
 **File:** `backend/agents/filings_agent.py`
 
 **Refresh:** Celery weekly job re-scrapes new filings and indexes them.
+**Why weekly:** Company filings are released periodically (quarterly for 10-Q, annually for 10-K). Weekly refresh captures new filings promptly without constant unnecessary indexing.
 
 ---
 
 ### 4.7 Agent 4 — Sentiment Agent
+<!-- "Wisdom of the crowd" from finance communities: what are retail investors saying? Useful signal for contrarian analysis and hype detection. -->
 
-**Job:** Gauge public/community sentiment.
+**Job:** Gauge public/community sentiment from social platforms. Crowd intelligence complements institutional research.
 
 **Implementation:**
 
@@ -369,11 +399,13 @@ def build_research_graph():
 
 **File:** `backend/agents/sentiment_agent.py`
 
+**Caveat:** Social sentiment is often irrational and can be manipulated. Reports present sentiment as one signal among many, not the deciding factor. Report Writer agent contextualizes this appropriately.
+
 ---
 
 ### 4.8 Agent 5 — Report Writer Agent
 
-**Job:** Synthesize all 4 agents' outputs into a clean investment brief.
+**Job:** Synthesize all 4 agents' outputs into a clean investment brief. This is the executive summary that investors actually use.
 
 **Implementation:**
 - Receives all 4 agent outputs in state
@@ -415,8 +447,9 @@ reports (
 ---
 
 ### 4.9 Chat With The Stock (Follow-up Q&A)
+<!-- Deepens engagement: users want to understand the *why* behind the verdict, not just the verdict -->
 
-**What it does:** After report loads, user asks follow-up questions in chat.
+**What it does:** After report loads, user asks follow-up questions in chat. This is where the platform earns its value — conversational depth.
 
 **Implementation:**
 - Once a report is generated, all underlying data (news, filings chunks, sentiment) is stored in Redis with 1-hour TTL keyed by report ID
@@ -437,23 +470,28 @@ chat_messages (
 
 **File:** `backend/api/chat.py`
 
+**Note:** Reusing cached context (filings, articles, sentiment) from the parent report keeps latency low and costs down. No need to re-fetch data.
+
 ---
 
 ### 4.10 Watchlist + Daily Briefings
+<!-- Engagement loop: users return daily to check their watchlist and read personalized briefings -->
 
 **Watchlist:**
 - User adds stocks to watchlist from any report or search
 - Frontend: a separate `/watchlist` page showing all tracked stocks with mini-cards (price, change, mini sentiment)
+- Purpose: Lightweight way to track multiple stocks without full reports (for monitoring many candidates)
 
 **Daily Briefing:**
-- Celery cron job runs at:
+<!-- Automated, personalized, timezone-aware: send briefings before market open so users start their day informed -->
+- Celery beat job (scheduled task) runs at:
   - 9:15 AM PKT for Pakistani users (before PSX opens at 9:30)
   - 8:30 AM EST for US users (before NYSE opens at 9:30)
 - For each user:
   - For each stock in watchlist, fetch latest price + check for big moves (>3%)
   - If big news in last 24h, include summary
   - Compile into email + in-app notification
-  - Use Resend or SendGrid for email
+  - Use Resend or SendGrid for email (managed service, reliable delivery)
 
 **Database Schema:**
 ```sql
@@ -479,23 +517,24 @@ briefings (
 ---
 
 ### 4.11 Smart Alerts
+<!-- Event-driven notifications: catch opportunities when they happen, not later -->
 
-**What it does:** User sets rules → backend monitors → notifications fire.
+**What it does:** User sets rules (conditions) → backend monitors continuously → notifications fire when conditions met. Transforms passive watching into active opportunity capture.
 
 **Alert Types:**
-- Price drops X% in a day
-- Price reaches X target
-- New filing released
-- Sentiment shifts (e.g., goes from bullish to bearish)
-- Big news (HIGH_POSITIVE or HIGH_NEGATIVE)
+- **Price drops X% in a day** — catch panic sells, potential entry points
+- **Price reaches X target** — automated limit buy/sell notifications
+- **New filing released** — stay informed of regulatory updates
+- **Sentiment shifts** (e.g., goes from bullish to bearish) — hype reversal signals
+- **Big news** (HIGH_POSITIVE or HIGH_NEGATIVE) — important catalysts
 
 **Implementation:**
-1. User creates alert via UI
+1. User creates alert via UI (stored in `alerts` table)
 2. Celery beat job every 15 mins:
    - Loops through all active alerts
-   - Checks condition against latest data
-   - If triggered: send email/push notif + mark as fired
-3. Alerts have cooldown periods (don't spam)
+   - Checks condition against latest data (price, news, sentiment)
+   - If condition met: send email/push notification + mark as fired
+3. Alerts have cooldown periods (prevent spam: if already alerted in last 24h, don't trigger again)
 
 **Database Schema:**
 ```sql
@@ -513,6 +552,8 @@ alerts (
 ```
 
 **File:** `backend/workers/alert_engine.py`
+
+**Performance note:** Checking thousands of alerts every 15 mins is feasible on modern hardware, but indexing the `alerts` table is essential (indexed by user_id, ticker, is_active for fast filtering).
 
 ---
 
