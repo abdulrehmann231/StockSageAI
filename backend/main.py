@@ -1,11 +1,18 @@
+# teste comment
 """FastAPI application entry point.
 
 Sets up the application with middleware, routes, and database lifecycle.
 """
+# teste comment
 
+# ------------------------------------------------------------
+# Standard library imports: async runtime, system utilities, context management
+# ------------------------------------------------------------
 import asyncio
 import sys
 from contextlib import asynccontextmanager
+
+print("[boot] main.py module is being initialized.")
 
 # Windows-specific event loop note:
 # The selector policy tends to be more compatible with libraries that rely on
@@ -14,12 +21,16 @@ from contextlib import asynccontextmanager
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+# ------------------------------------------------------------
+# Third-party framework and library imports
+# ------------------------------------------------------------
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 
+# Internal application imports: API routers, core config, database, services
 from api import alerts as alerts_router
 from api import auth as auth_router
 from api import chat as chat_router
@@ -36,6 +47,8 @@ from core.logging import get_logger, setup_logging
 from core.middleware import RequestIdMiddleware
 from db.session import Base, engine
 from services import cache_service
+
+print("[boot] All imports completed.")
 
 # Initialize logging before anything else
 setup_logging()
@@ -59,9 +72,11 @@ async def lifespan(app: FastAPI):
     # 3. Create/update database schema from SQLAlchemy metadata.
     # This centralizes one-time app initialization that should run before the
     # API starts accepting requests.
+    print("[startup] Entering lifespan startup phase...")
     print(f"[startup] Booting {settings.app_name}...")
     logger.info("Starting application", extra={"app_name": settings.app_name})
 
+    print("[startup] Ensuring pgcrypto extension and creating database tables...")
     # Ensure required DB extension and schema are available at startup.
     async with engine.begin() as conn:
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
@@ -76,10 +91,14 @@ async def lifespan(app: FastAPI):
     # Release external resources in a predictable order so in-flight operations
     # fail less noisily during termination. This also prevents connection leaks
     # when processes are recycled by orchestration platforms.
+    print("[shutdown] Entering lifespan shutdown phase...")
     print("[shutdown] Shutdown sequence started.")
+    print("[shutdown] Cleaning up resources...")
     print("[shutdown] Releasing cache and database resources...")
     logger.info("Shutting down application")
+    print("[shutdown] Closing cache service...")
     await cache_service.close()
+    print("[shutdown] Disposing database engine...")
     await engine.dispose()
 
     # Close browser pool if it was initialized
@@ -93,6 +112,7 @@ app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
     lifespan=lifespan,
+    # The lifespan context manager handles all startup/shutdown logic above.
 )
 # App object creation happens at import, before serving traffic.
 print("[init] FastAPI application instance created.")
@@ -125,6 +145,9 @@ app.add_middleware(
 )
 print(f"[init] CORS configured for origins: {settings.cors_origins_list}")
 
+# ------------------------------------------------------------
+# Router registration
+# ------------------------------------------------------------
 # Router registration strategy:
 # Each router encapsulates a domain area (auth, stocks, prices, sentiment, etc.)
 # so route files stay focused and maintainable. Registering them here creates a
@@ -146,8 +169,11 @@ print("[init] All API routers registered.")
 async def root():
     """Root endpoint returning app info."""
     # Lightweight endpoint useful for quick smoke checks.
+    # This handler logs a brief message on each invocation to aid debugging.
+    print("[request] Entering root handler...")
     print("[request] GET / called")
     print("[request] GET / responding with app metadata.")
+    print("[request] Returning root payload.")
     return {"app": settings.app_name, "version": "0.1.0", "status": "ok"}
 
 
@@ -157,6 +183,7 @@ async def health():
     # Liveness endpoint: service process is running.
     print("[request] GET /health called")
     print("[request] GET /health responding healthy.")
+    print("[request] Returning health payload.")
     return {"status": "healthy"}
 
 
@@ -222,3 +249,4 @@ async def health_ready():
 
     print("[health/ready] All dependencies healthy.")
     return {"status": "healthy", "checks": checks}
+# teste comment
