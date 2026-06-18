@@ -6,6 +6,7 @@ Sets up the application with middleware, routes, and database lifecycle.
 import asyncio
 import sys
 from contextlib import asynccontextmanager
+import os
 
 # Windows-specific event loop note:
 # The selector policy tends to be more compatible with libraries that rely on
@@ -45,6 +46,13 @@ settings = get_settings()
 logger = get_logger(__name__)
 # Print once at import time so startup configuration is visible in local runs.
 print(f"[init] Loaded settings for app: {settings.app_name}")
+# Quick, non-sensitive environment diagnostics useful during local dev.
+# Avoid printing secrets; only show presence/absence of key variables.
+print(f"[init] Python: {sys.version.split()[0]} | CWD: {os.getcwd()}")
+venv = os.environ.get("VIRTUAL_ENV") or os.environ.get("CONDA_PREFIX") or os.environ.get("PYENV_VIRTUAL_ENV")
+if venv:
+    print(f"[init] Virtual environment: {venv}")
+print(f"[init] DATABASE_URL present: {bool(os.environ.get('DATABASE_URL'))}")
 
 
 @asynccontextmanager
@@ -59,6 +67,9 @@ async def lifespan(app: FastAPI):
     # 3. Create/update database schema from SQLAlchemy metadata.
     # This centralizes one-time app initialization that should run before the
     # API starts accepting requests.
+    # Production note: schema migrations should be performed via Alembic or
+    # another migration tool. `Base.metadata.create_all` is convenient for
+    # local development but does not handle complex upgrades safely.
     print(f"[startup] Booting {settings.app_name}...")
     logger.info("Starting application", extra={"app_name": settings.app_name})
 
@@ -140,6 +151,8 @@ app.include_router(chat_router.router)
 app.include_router(watchlist_router.router)
 app.include_router(alerts_router.router)
 print("[init] All API routers registered.")
+print(f"[init] Registered routers count: {len([auth_router, stocks_router, prices_router, sentiment_router, news_router, report_router, reports_router, chat_router, watchlist_router, alerts_router])}")
+print("[init] Router registration complete; HTTP surface ready.")
 
 
 @app.get("/")
