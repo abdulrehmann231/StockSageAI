@@ -7,9 +7,9 @@ application lifecycle (startup/shutdown), middleware, routers, and basic
 health endpoints. Keep heavy business logic in dedicated modules under
 `api/`, `agents/`, or `services/` to keep this file easy to reason about.
 """
-
+#whats up
 # ---------------------------------------------------------------
-# Standard library imports
+# Standard library imports 
 # ---------------------------------------------------------------
 import os
 import sys
@@ -27,6 +27,11 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     print("[INIT] Windows selector event loop policy enabled")
 
+# Quick environment diagnostics useful during local development and CI
+print(f"[INIT] Python: {sys.version.split()[0]} | CWD: {os.getcwd()}")
+venv_path = os.environ.get("VIRTUAL_ENV") or os.environ.get("CONDA_PREFIX") or os.environ.get("PYENV_VIRTUAL_ENV")
+if venv_path:
+    print(f"[INIT] Virtual env active: {venv_path}")
 # ---------------------------------------------------------------
 # Third-party imports
 # ---------------------------------------------------------------
@@ -60,6 +65,19 @@ print(f"[INIT] Configuration loaded: {settings.app_name}")
 logger = get_logger(__name__)
 print("[INIT] Logger acquired")
 
+# Print a couple of non-sensitive settings if available; avoid dumping
+# secrets here. This helps quickly confirm environment mode during dev.
+try:
+    debug_flag = getattr(settings, "debug", None)
+    env_name = getattr(settings, "environment", None)
+    print(f"[INIT] settings.debug={debug_flag} settings.environment={env_name}")
+except Exception:
+    # Be forgiving if the settings object doesn't have these attrs
+    pass
+
+# Environment quick-checks (non-sensitive): confirm essential integrations
+print(f"[INIT] DATABASE_URL present: {bool(os.environ.get('DATABASE_URL'))}")
+print(f"[INIT] PINECONE_API_KEY present: {bool(os.environ.get('PINECONE_API_KEY'))}")
 
 # ---------------------------------------------------------------
 # Application lifecycle: startup & shutdown
@@ -196,6 +214,11 @@ print("[INIT]   - Watchlist routes registered")
 app.include_router(alerts_router.router)
 print("[INIT]   - Alerts routes registered")
 print("[INIT] All API routers registered")
+# Helpful quick summary: count of routers registered (keeps startup logs informative)
+print(f"[INIT] Total routers registered: {len([auth_router, stocks_router, prices_router, sentiment_router, news_router, report_router, reports_router, chat_router, watchlist_router, alerts_router])}")
+
+# Note: Keep the remainder of the module light — route handlers should
+# delegate heavy work to `api/*`, `agents/*`, and `services/*` modules.
 
 
 # ---------------------------------------------------------------
