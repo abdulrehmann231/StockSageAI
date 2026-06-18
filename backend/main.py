@@ -45,6 +45,8 @@ setup_logging()
 settings = get_settings()
 logger = get_logger(__name__)
 
+print(f"🚀 Starting {settings.app_name} v0.1.0")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -56,22 +58,26 @@ async def lifespan(app: FastAPI):
 
     # Initialize database: create pgcrypto extension and set up all tables
     async with engine.begin() as conn:
+        print("📊 Initializing database schema...")
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
         await conn.run_sync(Base.metadata.create_all)
 
     logger.info("Database initialized")
+    print("✅ Database ready")
     
     # Application is running - yield control back to FastAPI
     yield
 
     # Cleanup on shutdown
     logger.info("Shutting down application")
+    print("🛑 Shutting down application...")
     await cache_service.close()
     await engine.dispose()
 
     # Close browser pool if it was initialized (used for web scraping)
     from scrapers.browser_pool import close_browser_pool
     await close_browser_pool()
+    print("✅ Cleanup complete")
 
 
 app = FastAPI(
@@ -108,6 +114,8 @@ app.include_router(chat_router.router)
 app.include_router(watchlist_router.router)
 app.include_router(alerts_router.router)
 
+print("✨ All API routes registered")
+
 
 @app.get("/")
 async def root():
@@ -121,6 +129,7 @@ async def health():
     
     Returns 200 if the application is running (doesn't verify dependencies).
     """
+    print("💚 Health check (liveness) requested")
     return {"status": "healthy"}
 
 
@@ -142,26 +151,32 @@ async def health_ready():
         async with SessionLocal() as session:
             await session.execute(text("SELECT 1"))
         checks["database"] = "healthy"
+        print("✅ Database check: OK")
     except Exception as exc:
         logger.error("Database health check failed", extra={"error": str(exc)})
         checks["database"] = "unhealthy"
+        print(f"❌ Database check failed: {exc}")
 
     # Check Redis connectivity (used for caching)
     try:
         redis = cache_service.get_redis()
         await redis.ping()
         checks["redis"] = "healthy"
+        print("✅ Redis check: OK")
     except Exception as exc:
         logger.error("Redis health check failed", extra={"error": str(exc)})
         checks["redis"] = "unhealthy"
+        print(f"❌ Redis check failed: {exc}")
 
     # Return 503 if any critical dependency is unhealthy
     all_healthy = all(v == "healthy" for v in checks.values())
 
     if not all_healthy:
+        print(f"⚠️ Readiness check failed: {checks}")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"status": "unhealthy", "checks": checks},
         )
 
+    print("💚 All systems ready")
     return {"status": "healthy", "checks": checks}
