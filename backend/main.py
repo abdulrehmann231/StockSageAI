@@ -7,6 +7,7 @@ import asyncio
 import sys
 from contextlib import asynccontextmanager
 
+# Use selector loop policy on Windows for compatibility with common async I/O stacks.
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
@@ -38,6 +39,7 @@ setup_logging()
 
 settings = get_settings()
 logger = get_logger(__name__)
+# Print once at import time so startup configuration is visible in local runs.
 print(f"[init] Loaded settings for app: {settings.app_name}")
 
 
@@ -77,6 +79,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+# App object creation happens at import, before serving traffic.
 print("[init] FastAPI application instance created.")
 
 # Middleware order matters - request ID should be first to be available in all other middleware
@@ -115,6 +118,7 @@ print("[init] All API routers registered.")
 @app.get("/")
 async def root():
     """Root endpoint returning app info."""
+    # Lightweight endpoint useful for quick smoke checks.
     print("[request] GET / called")
     return {"app": settings.app_name, "version": "0.1.0", "status": "ok"}
 
@@ -122,6 +126,7 @@ async def root():
 @app.get("/health")
 async def health():
     """Basic health check endpoint."""
+    # Liveness endpoint: service process is running.
     print("[request] GET /health called")
     return {"status": "healthy"}
 
@@ -134,6 +139,7 @@ async def health_ready():
     """
     from fastapi import HTTPException, status
     from db.session import SessionLocal
+    # Readiness endpoint: verifies dependent services before declaring availability.
     print("[request] GET /health/ready called")
 
     checks = {"database": "unknown", "redis": "unknown"}
@@ -162,9 +168,11 @@ async def health_ready():
         print(f"[health/ready] Redis check failed: {exc}")
 
     all_healthy = all(v == "healthy" for v in checks.values())
+    # Emit aggregated dependency state for easier container/orchestrator debugging.
     print(f"[health/ready] Final checks: {checks}")
 
     if not all_healthy:
+        # Return 503 so load balancers/orchestrators can stop routing traffic here.
         print("[health/ready] Dependencies unhealthy, returning 503.")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
