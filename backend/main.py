@@ -49,6 +49,7 @@ settings = get_settings()
 logger = get_logger(__name__)
 
 print(f"🚀 Starting {settings.app_name} v0.1.0")
+print(f"🌐 Running on platform: {sys.platform}")
 
 
 @asynccontextmanager
@@ -58,6 +59,7 @@ async def lifespan(app: FastAPI):
     Initializes database schema on startup and cleans up connections on shutdown.
     """
     logger.info("Starting application", extra={"app_name": settings.app_name})
+    print("🧩 Entering application lifespan startup phase")
 
     # Initialize database: create pgcrypto extension and set up all tables
     async with engine.begin() as conn:
@@ -74,6 +76,7 @@ async def lifespan(app: FastAPI):
     # Cleanup on shutdown
     logger.info("Shutting down application")
     print("🛑 Shutting down application...")
+    print("🧹 Releasing cache and database resources")
     await cache_service.close()
     await engine.dispose()
 
@@ -124,6 +127,7 @@ app.include_router(chat_router.router)
 app.include_router(watchlist_router.router)
 app.include_router(alerts_router.router)
 print("All API routers registered")
+print("✅ Application bootstrapping complete")
 
 
 @app.get("/")
@@ -155,7 +159,9 @@ async def health_ready():
     from fastapi import HTTPException, status
     from db.session import SessionLocal
 
+    # Track dependency health in a single response object for clear diagnostics.
     checks = {"database": "unknown", "redis": "unknown"}
+    print("🔎 Readiness check requested")
 
     # Check database connectivity
     try:
@@ -181,6 +187,7 @@ async def health_ready():
 
     # Return 503 if any critical dependency is unhealthy
     all_healthy = all(v == "healthy" for v in checks.values())
+    print(f"📋 Readiness summary: {checks}")
 
     # Return 503 if any dependency is down
     if not all_healthy:
