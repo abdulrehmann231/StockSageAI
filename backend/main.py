@@ -1,3 +1,4 @@
+# StockSageAI - Backend server entry point
 """FastAPI application entry point.
 
 Sets up the application with middleware, routes, and database lifecycle.
@@ -5,12 +6,13 @@ Sets up the application with middleware, routes, and database lifecycle.
 
 import asyncio
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager  # Provides utilities for managing async setup/teardown
 
-# Windows compatibility: Use Selector event loop for Windows instead of the default ProactorEventLoop
+# Windows compatibility: Use Selector event loop instead of the default ProactorEventLoop
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+# Third-party imports
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -42,6 +44,7 @@ from services import cache_service
 # Initialize logging before anything else
 setup_logging()
 
+# Load application configuration from environment variables
 settings = get_settings()
 logger = get_logger(__name__)
 
@@ -80,18 +83,23 @@ async def lifespan(app: FastAPI):
     print("✅ Cleanup complete")
 
 
+# Create the FastAPI application instance
 app = FastAPI(
-    title=settings.app_name,
-    version="0.1.0",
-    lifespan=lifespan,
+    title=settings.app_name,  # Application name from configuration
+    version="0.1.0",           # Current API version
+    lifespan=lifespan,         # Startup/shutdown lifecycle handler
 )
+
+print("Server is starting...")
 
 # Middleware order matters - request ID should be first to be available in all other middleware
 app.add_middleware(RequestIdMiddleware)
+print("Request ID middleware added")
 
 # Set up rate limiting with SlowAPI
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+print("Rate limiter configured")
 
 # CORS configuration - allow requests from frontend origins
 app.add_middleware(
@@ -101,8 +109,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+print("CORS middleware configured")
 
 # Register all API routers
+print("Registering API routers...")
 app.include_router(auth_router.router)
 app.include_router(stocks_router.router)
 app.include_router(prices_router.router)
@@ -113,13 +123,14 @@ app.include_router(reports_router.router)
 app.include_router(chat_router.router)
 app.include_router(watchlist_router.router)
 app.include_router(alerts_router.router)
-
-print("✨ All API routes registered")
+print("All API routers registered")
 
 
 @app.get("/")
 async def root():
     """Root endpoint returning app info."""
+    print("Root endpoint hit")
+    # Return basic application metadata
     return {"app": settings.app_name, "version": "0.1.0", "status": "ok"}
 
 
@@ -129,7 +140,7 @@ async def health():
     
     Returns 200 if the application is running (doesn't verify dependencies).
     """
-    print("💚 Health check (liveness) requested")
+    print("Health check (liveness) requested")
     return {"status": "healthy"}
 
 
@@ -171,6 +182,7 @@ async def health_ready():
     # Return 503 if any critical dependency is unhealthy
     all_healthy = all(v == "healthy" for v in checks.values())
 
+    # Return 503 if any dependency is down
     if not all_healthy:
         print(f"⚠️ Readiness check failed: {checks}")
         raise HTTPException(
