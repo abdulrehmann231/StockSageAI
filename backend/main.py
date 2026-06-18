@@ -1,6 +1,11 @@
 """FastAPI application entry point.
 
 Sets up the application with middleware, routes, and database lifecycle.
+
+This module is intentionally small and focused: it wires together the
+application lifecycle (startup/shutdown), middleware, routers, and basic
+health endpoints. Keep heavy business logic in dedicated modules under
+`api/`, `agents/`, or `services/` to keep this file easy to reason about.
 """
 
 # ---------------------------------------------------------------
@@ -11,9 +16,12 @@ import sys
 import asyncio
 from contextlib import asynccontextmanager
 
+# Log early platform information for easier debugging during local dev
 print(f"[INIT] Starting on platform: {sys.platform}")
 
-# Windows: use Selector event loop to avoid Proactor compatibility issues
+# On Windows, the default Proactor event loop can cause compatibility
+# issues with some third-party asyncio libraries (SSL/subprocess). Use the
+# selector policy which is more compatible for this project's async stack.
 if sys.platform == "win32":
     print("[INIT] Configuring Windows event loop...")
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -44,19 +52,6 @@ from api import (
     watchlist as watchlist_router,  # Watchlist CRUD endpoints
 )
 
-# ---------------------------------------------------------------
-# Application imports - core services
-# ---------------------------------------------------------------
-from core.config import get_settings  # Environment-based configuration
-from core.limiter import limiter  # Rate limiting instance
-from core.logging import get_logger, setup_logging  # Structured logging
-from core.middleware import RequestIdMiddleware  # Per-request ID tracking
-from db.session import Base, engine  # SQLAlchemy ORM
-from services import cache_service  # Redis caching layer
-
-# ---------------------------------------------------------------
-# Bootstrap: logging, config, and module-level state
-# ---------------------------------------------------------------
 print("[INIT] Setting up logging and configuration...")
 setup_logging()
 print("[INIT] Logging initialized")
@@ -75,16 +70,32 @@ print("[INIT] Logger acquired")
 async def lifespan(app: FastAPI):
     """Application lifespan handler.
 
-    Creates database schema on startup and cleans up connections on shutdown.
+    Startup tasks:
+    - Ensure Postgres extensions required by the app exist (pgcrypto)
+    - Create ORM tables if missing (safe no-op when already created)
+
+    Shutdown tasks:
+    - Close cache/Redis connections
+    - Dispose DB engine pool
+    - Close any browser pools used by scrapers
+
+    Keeping these tasks in a single lifespan handler gives FastAPI a clean
+    way to manage resources across the whole app process.
     """
     logger.info("Starting application", extra={"app_name": settings.app_name})
     print("[STARTUP] Application starting...")
     print("[STARTUP] Initializing database...")
 
-    # Ensure pgcrypto extension and create all ORM-mapped tables
+    # Ensure pgcrypto extension and create all ORM-mapped tables. The
+    # `CREATE EXTENSION` command is idempotent; running it on startup is a
+    # simple way to ensure UUID functions (gen_random_uuid) work in dev and
+    # production without a separate migration step.
     async with engine.begin() as conn:
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
         print("[STARTUP] pgcrypto extension ready")
+        # Create any missing tables based on SQLAlchemy models. This is a
+        # convenience for development; production deployments should use a
+        # proper migration workflow (eg. Alembic) when schema changes.
         await conn.run_sync(Base.metadata.create_all)
         print("[STARTUP] ORM tables synchronized")
 
@@ -93,7 +104,9 @@ async def lifespan(app: FastAPI):
     print("[STARTUP] Application is now accepting requests")
     yield
 
-    # Cleanup resources on shutdown
+    # Cleanup resources on shutdown: close cache first, then database, and
+    # finally any external resources such as browser pools. Order matters to
+    # avoid race conditions during graceful termination.
     logger.info("Shutting down application")
     print("[SHUTDOWN] Shutting down...")
     print("[SHUTDOWN] Closing Redis cache...")
@@ -104,6 +117,8 @@ async def lifespan(app: FastAPI):
     print("[SHUTDOWN] Database engine disposed")
 
     print("[SHUTDOWN] Closing browser pool...")
+    # Close Playwright/selenium/browser pools used by scrapers to avoid
+    # leaving orphaned browser processes on the host machine.
     from scrapers.browser_pool import close_browser_pool
     await close_browser_pool()
     print("[SHUTDOWN] Browser pool closed")
@@ -114,6 +129,8 @@ print("[INIT] Creating FastAPI app instance...")
 app = FastAPI(
     title=settings.app_name,
     version="0.1.0",
+    # Provide the lifespan manager so FastAPI runs our startup/shutdown
+    # logic automatically when the server process begins and ends.
     lifespan=lifespan,
 )
 print("[INIT] App created")
@@ -124,18 +141,20 @@ print("[INIT] Configuring middleware stack...")
 # Order matters: first added = outermost (wraps all inner layers)
 # ---------------------------------------------------------------
 
-# Request ID must be the outermost middleware so it's available everywhere
+# `RequestIdMiddleware` should wrap the request early so the generated
+# request id is available to all downstream handlers and loggers.
 print("[INIT] Adding Request ID middleware...")
 app.add_middleware(RequestIdMiddleware)
 print("[INIT] Request ID middleware added")
 
-# Rate limiting to prevent abuse
+# Rate limiter is attached to the app state and a global exception handler
+# is registered to translate rate-limit errors into proper HTTP responses.
 print("[INIT] Configuring rate limiter...")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 print("[INIT] Rate limiter configured")
 
-# CORS (Cross-Origin Resource Sharing) — controls which external domains can reach the API
+# Configure CORS to allow the frontend application to talk to this API.
 print(f"[INIT] Configuring CORS with origins: {settings.cors_origins_list}")
 app.add_middleware(
     CORSMiddleware,
@@ -153,6 +172,9 @@ print("[INIT] Middleware configuration complete")
 # Each router handles a distinct API path prefix
 # ---------------------------------------------------------------
 print("[INIT] Registering API routers...")
+# Register routers from the `api` package. Keeping routers small and
+# focused (one per resource) helps maintain clear request/response schemas
+# and keeps the main app wiring simple.
 app.include_router(auth_router.router)
 print("[INIT]   - Auth routes registered")
 app.include_router(stocks_router.router)
@@ -183,14 +205,22 @@ print("[INIT] All API routers registered")
 
 @app.get("/")
 async def root():
-    """Root endpoint returning app metadata."""
+    """Root endpoint returning app metadata.
+
+    Keep this lightweight so health checks and basic uptime probes stay fast.
+    """
     print("[API] GET / — root endpoint called")
     return {"app": settings.app_name, "version": "0.1.0", "status": "ok"}
 
 
 @app.get("/health")
 async def health():
-    """Liveness check - returns 200 if the process is running."""
+    """Liveness check - returns 200 if the process is running.
+
+    This endpoint verifies the process is alive. It should be very cheap
+    and not perform any external I/O to avoid false negatives from slow
+    dependencies.
+    """
     print("[API] GET /health — liveness check")
     return {"status": "healthy"}
 
@@ -208,7 +238,8 @@ async def health_ready():
     print("[API] GET /health/ready — readiness check started")
     checks = {"database": "unknown", "redis": "unknown"}
 
-    # Check database connectivity
+    # Check database connectivity with a minimal, fast query. Using a
+    # lightweight `SELECT 1` avoids loading large transactions or models.
     print("[API]   Checking database...")
     try:
         async with SessionLocal() as session:
@@ -216,11 +247,14 @@ async def health_ready():
         checks["database"] = "healthy"
         print("[API]   Database: healthy")
     except Exception as exc:
+        # Log the error so operators can triage the failure quickly.
         logger.error("Database health check failed", extra={"error": str(exc)})
         checks["database"] = "unhealthy"
         print(f"[API]   Database: unhealthy — {exc}")
 
-    # Check Redis connectivity
+    # Check Redis connectivity. Redis is primarily used for caching and
+    # rate-limiting; an outage is important but not necessarily fatal for
+    # read-only endpoints depending on design.
     print("[API]   Checking Redis...")
     try:
         redis = cache_service.get_redis()
