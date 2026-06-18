@@ -4,6 +4,9 @@
 Sets up the application with middleware, routes, and database lifecycle.
 """
 
+# ---------------------------------------------------------------
+# Standard library imports
+# ---------------------------------------------------------------
 import os  # Operating system interface for path and environment operations
 import asyncio  # Async I/O framework for concurrent operations
 import sys  # System-specific parameters and functions
@@ -15,14 +18,24 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     print("🪟 Windows selector event loop policy enabled")
 
+# ---------------------------------------------------------------
+# Module-level setup
+# Executed once when the Python module is first imported by uvicorn.
+# ---------------------------------------------------------------
+
+# ---------------------------------------------------------------
 # Third-party imports
+# ---------------------------------------------------------------
 from fastapi import FastAPI  # Web framework for building APIs
 from fastapi.middleware.cors import CORSMiddleware  # Cross-Origin Resource Sharing middleware
 from slowapi import _rate_limit_exceeded_handler  # Rate limit error handler
 from slowapi.errors import RateLimitExceeded  # Exception raised when rate limit is hit
 from sqlalchemy import text  # Raw SQL execution helper
 
-# API route routers for different features
+# ---------------------------------------------------------------
+# Application imports - API route routers for different features
+# Each router maps to a distinct API path (e.g. /auth/*, /stocks/*)
+# ---------------------------------------------------------------
 from api import alerts as alerts_router  # Stock price alert management
 from api import auth as auth_router  # User authentication and authorization
 from api import chat as chat_router  # AI-powered chat/assistant feature
@@ -34,13 +47,17 @@ from api import sentiment as sentiment_router  # Market sentiment analysis
 from api import stocks as stocks_router  # Stock search and discovery
 from api import watchlist as watchlist_router  # User watchlist management
 
-# Core configuration and utilities
+# ---------------------------------------------------------------
+# Application imports - core configuration and utilities
+# ---------------------------------------------------------------
 from core.config import get_settings  # Application settings from environment
 from core.limiter import limiter  # Rate limiting instance
 from core.logging import get_logger, setup_logging  # Structured logging setup
 from core.middleware import RequestIdMiddleware  # Adds unique request IDs to each request
 
-# Database setup
+# ---------------------------------------------------------------
+# Application imports - database and data layer
+# ---------------------------------------------------------------
 from db.session import Base, engine  # SQLAlchemy ORM base and engine
 from services import cache_service  # Redis-based caching service
 
@@ -58,6 +75,10 @@ print(f"🚀 Starting {settings.app_name} v0.1.0")
 print(f"🌐 Running on platform: {sys.platform}")
 print(f"🔌 Allowed CORS origins: {settings.cors_origins_list}")
 
+
+# ---------------------------------------------------------------
+# Application lifecycle
+# ---------------------------------------------------------------
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -96,6 +117,10 @@ async def lifespan(app: FastAPI):
     print("✅ Cleanup complete")
 
 
+# ---------------------------------------------------------------
+# FastAPI app instantiation
+# ---------------------------------------------------------------
+
 # Create the FastAPI application instance
 app = FastAPI(
     title=settings.app_name,  # Application name from configuration
@@ -106,6 +131,11 @@ app = FastAPI(
 # This print confirms module-level startup execution when the app process boots.
 print("Server is starting...")
 print("📦 FastAPI app object created")
+
+# ---------------------------------------------------------------
+# Middleware stack
+# Middleware is applied in the order it is added (first = outermost).
+# ---------------------------------------------------------------
 
 # Middleware order matters - request ID should be first to be available in all other middleware
 app.add_middleware(RequestIdMiddleware)
@@ -126,6 +156,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 print("CORS middleware configured")
+
+# ---------------------------------------------------------------
+# Route registration
+# Each router maps to a feature area and is mounted with its own prefix.
+# ---------------------------------------------------------------
 
 # Register all API routers
 print("Registering API routers...")
@@ -152,6 +187,10 @@ print("  ✅ Alerts router registered")
 print("All API routers registered")
 print("🧭 API route map finalized")
 print("✅ Application bootstrapping complete")
+
+# ---------------------------------------------------------------
+# Route handlers
+# ---------------------------------------------------------------
 
 
 @app.get("/")
