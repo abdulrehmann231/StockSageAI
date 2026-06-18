@@ -93,6 +93,7 @@ app = FastAPI(
     lifespan=lifespan,         # Startup/shutdown lifecycle handler
 )
 
+# This print confirms module-level startup execution when the app process boots.
 print("Server is starting...")
 
 # Middleware order matters - request ID should be first to be available in all other middleware
@@ -105,6 +106,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 print("Rate limiter configured")
 
 # CORS configuration - allow requests from frontend origins
+# Keep this broad only in trusted environments; tighten in production where possible.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -133,6 +135,7 @@ print("✅ Application bootstrapping complete")
 @app.get("/")
 async def root():
     """Root endpoint returning app info."""
+    # Useful as a quick sanity endpoint for reverse proxy and app wiring checks.
     print("Root endpoint hit")
     # Return basic application metadata
     return {"app": settings.app_name, "version": "0.1.0", "status": "ok"}
@@ -161,6 +164,7 @@ async def health_ready():
 
     # Track dependency health in a single response object for clear diagnostics.
     checks = {"database": "unknown", "redis": "unknown"}
+    # Readiness probes are usually called by orchestrators before routing traffic.
     print("🔎 Readiness check requested")
 
     # Check database connectivity
@@ -187,6 +191,7 @@ async def health_ready():
 
     # Return 503 if any critical dependency is unhealthy
     all_healthy = all(v == "healthy" for v in checks.values())
+    # Keep this summary log for quick triage during startup incidents.
     print(f"📋 Readiness summary: {checks}")
 
     # Return 503 if any dependency is down
