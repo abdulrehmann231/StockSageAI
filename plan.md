@@ -10,6 +10,8 @@
 
 ## 1. Project Vision
 
+> **Note:** This plan is a living document — update it as decisions change during development.
+
 ### 1.1 The Problem
 <!-- The core insight: Investment research is fragmented and inaccessible for retail investors in Pakistan -->
 Retail investors — especially in Pakistan — lack accessible, AI-powered research tools. Information is scattered across SEC filings, PSX announcements, news sites, social media, and finance Telegram/WhatsApp groups. Most investors either:
@@ -96,7 +98,7 @@ A multi-agent AI system that automatically:
 ## 3. Tech Stack
 
 ### 3.1 Frontend
-<!-- Modern Next.js stack: App Router for file-based routing, minimal state management, strong UX with real-time updates -->
+<!-- Modern Next.js stack: App Router for file-based routing, minimal state management, real-time UI -->
 - **Framework:** Next.js 14 (App Router for modern file-based routing)
 - **Styling:** Tailwind CSS + shadcn/ui (utility-first, accessible components)
 - **State:** Zustand (lightweight, simpler than Redux for this scale)
@@ -106,10 +108,10 @@ A multi-agent AI system that automatically:
 - **Auth:** NextAuth.js with credentials + Google OAuth (familiar, industry-standard)
 
 ### 3.2 Backend
-<!-- FastAPI for performance, LangGraph for sophisticated multi-agent workflows, OpenRouter for model flexibility -->
+<!-- FastAPI for performance, LangGraph for multi-agent workflows, OpenRouter for model flexibility -->
 - **Framework:** FastAPI (Python 3.11+, async-native, excellent for I/O-bound work)
 - **Agent Framework:** LangGraph (built on LangChain) — best for multi-agent orchestration with state management
-- **LLM Provider:** OpenRouter (single API key → access to GPT-4o, Claude, Gemini, Llama — model flexibility)
+- **LLM Provider:** OpenRouter (single API key → access to GPT-4o, Claude, Gemini, Llama)
 - **Embeddings:** OpenAI text-embedding-3-small (cheap, reliable, 1536-dim vectors for Pinecone)
 - **Background Jobs:** Celery + Redis as broker (distributed task queue for scrapers, alerts, daily jobs)
 - **WebSockets:** FastAPI WebSocket + Socket.io (real-time agent progress, live prices)
@@ -214,7 +216,7 @@ stocks (
 ---
 
 ### 4.3 The Multi-Agent Orchestration System (Core Feature)
-<!-- This is the heart of StockSageAI: LangGraph-based orchestration that parallelizes agent execution for speed and insight diversity -->
+<!-- The heart of StockSageAI: LangGraph-based orchestration parallelizing 5 specialized agents for speed and diverse insights -->
 
 **What it does:** When user requests a report, orchestrator spawns 4 specialized agents in parallel, then a 5th agent synthesizes the output.
 
@@ -322,7 +324,7 @@ def build_research_graph():
 ---
 
 ### 4.6 Agent 3 — Filings RAG Agent (Most Technically Impressive)
-<!-- RAG (Retrieval-Augmented Generation) is the key to credible, cited answers. Facts from actual company documents, not hallucinations. -->
+<!-- RAG (Retrieval-Augmented Generation) over financial documents = grounded, cited answers from actual filings, not hallucinations -->
 
 **Job:** Answer questions from actual SEC filings or PSX annual reports using RAG (retrieval-augmented generation).
 
@@ -604,6 +606,7 @@ alerts (
 ---
 
 ### 4.15 Portfolio Tracker
+<!-- This section is the most detailed because it bridges AI agents with real financial calculations — key for demonstrating full-stack financial engineering -->
 
 **What it does:** Lets users add their actual stock holdings, tracks real-time P&L, and uses the existing multi-agent system to give AI-powered rebalancing advice on their actual portfolio.
 
@@ -1107,6 +1110,7 @@ stocksage-ai/
 ---
 
 ## 10. Phased Build Plan (6-7 Weeks)
+<!-- Build order is intentional: start with infrastructure, add agents one-by-one, then orchestrate everything -->
 
 ### Phase 0 — Setup (2-3 days)
 - Initialize monorepo
@@ -1135,6 +1139,7 @@ stocksage-ai/
 - **Deliverable:** User gets news summaries and sentiment scores
 
 ### Phase 4 — Filings RAG Agent (Week 3-4)
+<!-- RAG phase is the most technically complex: requires scraping, parsing, chunking, embedding, and vector search -->
 - One-time SEC EDGAR scraping for top 100 US stocks
 - PSX annual report scraping for KSE-100 stocks
 - Pinecone indexing pipeline
@@ -1166,6 +1171,7 @@ stocksage-ai/
 - **Deliverable:** Users can track actual holdings with AI-powered rebalancing advice
 
 ### Phase 8 — Polish + Macro + Daily Briefings (Week 6)
+<!-- Polish phase is about reliability, UX refinement, and making the product feel production-grade -->
 - Macro context panel
 - Daily briefing emails
 - Compare mode
@@ -1223,6 +1229,7 @@ SENTRY_DSN=<for monitoring>
 ---
 
 ## 12. AI Model Strategy (Per Agent)
+<!-- Model routing per agent is the key cost optimization strategy — don't use one model for everything -->
 
 This section defines exactly which LLM to use for each agent, balancing cost, quality, and free tier usage.
 
@@ -1398,6 +1405,7 @@ Very affordable to run as a portfolio project.
 ---
 
 ## 14. Key Design Decisions & Rationale
+<!-- Every decision here was made with two criteria: best tool for the job AND strongest CV signal -->
 
 **Why LangGraph over CrewAI/AutoGen?**
 - Better state management
@@ -1428,6 +1436,7 @@ Very affordable to run as a portfolio project.
 ---
 
 ## 15. What This Demonstrates To Recruiters
+<!-- Keep this section updated — it's the pitch for why this project belongs on a resume -->
 
 When this project is on the CV, it shows:
 
@@ -1447,6 +1456,7 @@ When this project is on the CV, it shows:
 ---
 
 ## 16. Future Enhancements (v2+)
+<!-- v2 features are scoped as stretch goals — implement only after v1 is stable and deployed -->
 
 - **Urdu language support** — huge differentiator for Pakistani market
 - **Mobile app** (React Native, share most code)
