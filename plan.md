@@ -1,5 +1,23 @@
 # StockSage AI — Multi-Agent Stock Research Analyst
 
+<!-- 
+  ============================================================
+  PROJECT PLAN DOCUMENT
+  ============================================================
+  This is the master planning document for StockSage AI.
+  It serves as the single source of truth for:
+    - Architecture decisions
+    - Feature specifications
+    - Database schemas
+    - API endpoint definitions
+    - Build phases and timeline
+    - Cost estimates
+  
+  Keep this document updated as the project evolves.
+  Last updated: June 2026
+  ============================================================
+-->
+
 > **Project:** A multi-agent AI platform that automates stock research for both Pakistani (PSX) and Global (US) markets. Built as a portfolio-grade, production-ready application.
 >
 > **Author:** Abdul Rehman M. Nasir
@@ -11,12 +29,14 @@
 ## 1. Project Vision
 
 ### 1.1 The Problem
+<!-- Core pain point that motivates the entire project -->
 Retail investors — especially in Pakistan — lack accessible, AI-powered research tools. Information is scattered across SEC filings, PSX announcements, news sites, social media, and finance Telegram/WhatsApp groups. Most investors either:
 - Rely on unverified tips
 - Spend hours manually researching
 - Use expensive Bloomberg/Reuters terminals (out of reach for most)
 
 ### 1.2 The Solution
+<!-- The 5-pillar value proposition -->
 A multi-agent AI system that automatically:
 1. Fetches live price + market data
 2. Reads and summarizes financial filings (RAG)
@@ -25,6 +45,7 @@ A multi-agent AI system that automatically:
 5. Generates a clean, plain-English investment report with Buy/Hold/Sell verdict
 
 ### 1.3 Dual Market Strategy
+<!-- Key differentiator: first-class PSX support -->
 - **Pakistani Market (PSX):** First-class support — KSE-100, all major sectors, PKR pricing, SBP rate context
 - **Global Market (US):** NYSE, NASDAQ stocks, USD pricing, Fed rate context
 - Unified UI with a market toggle
@@ -35,6 +56,21 @@ A multi-agent AI system that automatically:
 ---
 
 ## 2. High-Level Architecture
+
+<!--
+  Architecture Overview:
+  The system follows a layered architecture:
+    1. Client Layer (Next.js) - User interface
+    2. API Gateway (FastAPI) - Request routing, auth, rate limiting
+    3. Orchestration Layer - LangGraph for multi-agent coordination
+    4. Agent Layer - Specialized AI agents (price, news, RAG, sentiment, report)
+    5. Data Layer - PostgreSQL, Redis, Pinecone, S3
+    6. Worker Layer - Celery background tasks
+    7. External Sources - PSX, Yahoo Finance, SEC, Reddit, etc.
+  
+  Data flows both synchronously (API requests) and asynchronously
+  (Celery workers, WebSocket streams for agent progress).
+-->
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -88,7 +124,18 @@ A multi-agent AI system that automatically:
 
 ## 3. Tech Stack
 
+<!--
+  Technology Selection Rationale:
+  Each tool was chosen based on:
+    1. Community support and ecosystem maturity
+    2. Free tier availability for development
+    3. Production scalability
+    4. Team familiarity and learning curve
+    5. Industry recognition (recruiters know these tools)
+-->
+
 ### 3.1 Frontend
+<!-- Next.js 14 App Router with server components for performance -->
 - **Framework:** Next.js 14 (App Router)
 - **Styling:** Tailwind CSS + shadcn/ui
 - **State:** Zustand (lightweight, simpler than Redux)
@@ -98,6 +145,7 @@ A multi-agent AI system that automatically:
 - **Auth:** NextAuth.js with credentials + Google OAuth
 
 ### 3.2 Backend
+<!-- FastAPI chosen for async support and Python AI ecosystem -->
 - **Framework:** FastAPI (Python 3.11+)
 - **Agent Framework:** LangGraph (built on LangChain) — best for multi-agent orchestration
 - **LLM Provider:** OpenRouter (gives access to GPT-4o, Claude, Gemini, etc. with one API)
@@ -107,6 +155,7 @@ A multi-agent AI system that automatically:
 - **Auth:** JWT tokens, bcrypt for hashing
 
 ### 3.3 Databases
+<!-- Multi-database strategy: relational for structured data, vector for RAG, cache for speed -->
 - **PostgreSQL:** Users, watchlists, reports, alerts, cached prices (Supabase for managed hosting)
 - **Pinecone:** Vector DB for SEC filings + PSX annual reports RAG
 - **Redis:** Caching, task queue, real-time price storage, rate limiting
@@ -115,6 +164,7 @@ A multi-agent AI system that automatically:
 ### 3.4 External APIs & Data Sources
 
 **Global Market:**
+<!-- Free APIs preferred to minimize costs during development -->
 - Yahoo Finance (via `yfinance` Python lib) — free, no API key
 - Alpha Vantage — free tier, 25 req/day
 - SEC EDGAR API — free, official
@@ -123,12 +173,14 @@ A multi-agent AI system that automatically:
 - Twitter/X — paid or alternative scraping
 
 **Pakistani Market:**
+<!-- PSX requires custom scrapers - no official API available -->
 - PSX official site — scraping required (Selenium/Playwright)
 - Business Recorder, Dawn Business, Profit Pakistan — RSS feeds + scraping
 - Mettis Global — scraping
 - Public Telegram channels — Telethon library
 
 ### 3.5 Infrastructure
+<!-- All services chosen for free tier availability -->
 - **Frontend Hosting:** Vercel (free tier)
 - **Backend Hosting:** Railway or Render (managed FastAPI hosting)
 - **Database:** Supabase (managed PostgreSQL + Auth + Storage)
@@ -1067,7 +1119,17 @@ stocksage-ai/
 
 ## 10. Phased Build Plan (6-7 Weeks)
 
+<!--
+  Build Strategy:
+  - Each phase has a clear deliverable that can be demoed
+  - Phases are ordered by dependency (later phases build on earlier ones)
+  - MVP is achieved at end of Phase 5 (full report generation)
+  - Phases 6-9 add polish and advanced features
+  - Each phase should result in a deployable increment
+-->
+
 ### Phase 0 — Setup (2-3 days)
+<!-- Foundation: accounts, configs, local dev environment -->
 - Initialize monorepo
 - Set up Supabase, Pinecone, Upstash Redis accounts
 - Configure OpenRouter API key
@@ -1075,6 +1137,7 @@ stocksage-ai/
 - Deploy hello-world to Vercel + Railway
 
 ### Phase 1 — Auth + Stock Search (Week 1)
+<!-- Core user flow: signup -> search -> view stock -->
 - Implement signup/login/JWT
 - Build `stocks` table population script
 - Stock search with autocomplete
@@ -1082,18 +1145,21 @@ stocksage-ai/
 - **Deliverable:** User can sign up and search any stock
 
 ### Phase 2 — Single Agent (Price Agent) MVP (Week 1-2)
+<!-- First agent: proves the multi-agent architecture works -->
 - Build Price Agent for both PSX and Global
 - Stock detail page showing live price + basic info
 - WebSocket for live price updates on watchlist
 - **Deliverable:** User can see live prices for any stock
 
 ### Phase 3 — News + Sentiment Agents (Week 2-3)
+<!-- Data agents: gathering and analyzing external information -->
 - Build News Agent with Pakistani + Global scrapers
 - Build Sentiment Agent (Reddit + scraping)
 - Add to report flow
 - **Deliverable:** User gets news summaries and sentiment scores
 
 ### Phase 4 — Filings RAG Agent (Week 3-4)
+<!-- Most technically complex agent: vector search over financial documents -->
 - One-time SEC EDGAR scraping for top 100 US stocks
 - PSX annual report scraping for KSE-100 stocks
 - Pinecone indexing pipeline
@@ -1101,6 +1167,7 @@ stocksage-ai/
 - **Deliverable:** User gets answers from actual filings
 
 ### Phase 5 — Orchestration + Report Writer (Week 4)
+<!-- Integration phase: connect all agents, generate final reports -->
 - LangGraph multi-agent setup
 - Report Writer agent
 - WebSocket streaming of progress
@@ -1108,12 +1175,14 @@ stocksage-ai/
 - **Deliverable:** Full investment reports generated
 
 ### Phase 6 — Chat + Watchlist + Alerts (Week 5)
+<!-- Personalization: user-specific features -->
 - Chat with stock feature
 - Watchlist CRUD
 - Alert engine + Celery scheduling
 - **Deliverable:** Full personalization features
 
 ### Phase 7 — Portfolio Tracker (Week 5-6, 4-5 days)
+<!-- Advanced feature: transforms app from research tool to investment companion -->
 - Holdings + transactions database schema
 - Manual holdings entry UI
 - Real-time P&L calculation + portfolio dashboard
@@ -1125,6 +1194,7 @@ stocksage-ai/
 - **Deliverable:** Users can track actual holdings with AI-powered rebalancing advice
 
 ### Phase 8 — Polish + Macro + Daily Briefings (Week 6)
+<!-- Final polish: UX improvements and production readiness -->
 - Macro context panel
 - Daily briefing emails
 - Compare mode
@@ -1133,6 +1203,7 @@ stocksage-ai/
 - **Deliverable:** Production-ready v1
 
 ### Phase 9 — Launch
+<!-- Go live: deploy, document, share -->
 - Deploy production
 - Write portfolio case study
 - Record demo video
@@ -1420,6 +1491,12 @@ When this project is on the CV, it shows:
 
 ## 17. Notes for Claude Code (or any AI assistant) Reading This
 
+<!--
+  Development Guidelines:
+  These are hard-won lessons for building this type of project.
+  Follow these to avoid common pitfalls and ship faster.
+-->
+
 If you're building this in a new chat, here are pointers:
 
 1. **Start with Phase 0 setup.** Don't skip to fancy features.
@@ -1437,4 +1514,10 @@ If you're building this in a new chat, here are pointers:
 
 **END OF PLAN**
 
-Build with intent. Ship something real. Good luck.
+<!-- 
+  Final Note:
+  This plan is a living document. Update it as you learn more about
+  what works and what doesn't. The best plan is one that adapts.
+  
+  Build with intent. Ship something real. Good luck.
+-->
