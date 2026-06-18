@@ -11,7 +11,9 @@ from contextlib import asynccontextmanager  # Provides utilities for managing as
 
 # Windows compatibility: Use Selector event loop instead of the default ProactorEventLoop
 if sys.platform == "win32":
+    # This avoids occasional async/socket edge cases seen on Windows with Proactor.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    print("🪟 Windows selector event loop policy enabled")
 
 # Third-party imports
 from fastapi import FastAPI  # Web framework for building APIs
@@ -69,7 +71,9 @@ async def lifespan(app: FastAPI):
     # Initialize database: create pgcrypto extension and set up all tables
     async with engine.begin() as conn:
         print("📊 Initializing database schema...")
+        print("🧱 Ensuring pgcrypto extension is available")
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
+        print("🗂️ Creating/updating database tables from ORM metadata")
         await conn.run_sync(Base.metadata.create_all)
 
     logger.info("Database initialized")
@@ -87,6 +91,7 @@ async def lifespan(app: FastAPI):
 
     # Close browser pool if it was initialized (used for web scraping)
     from scrapers.browser_pool import close_browser_pool
+    print("🌍 Closing scraper browser pool")
     await close_browser_pool()
     print("✅ Cleanup complete")
 
@@ -100,6 +105,7 @@ app = FastAPI(
 
 # This print confirms module-level startup execution when the app process boots.
 print("Server is starting...")
+print("📦 FastAPI app object created")
 
 # Middleware order matters - request ID should be first to be available in all other middleware
 app.add_middleware(RequestIdMiddleware)
@@ -144,6 +150,7 @@ print("  ✅ Watchlist router registered")
 app.include_router(alerts_router.router)   # /alerts/* - price alerts
 print("  ✅ Alerts router registered")
 print("All API routers registered")
+print("🧭 API route map finalized")
 print("✅ Application bootstrapping complete")
 
 
@@ -155,6 +162,7 @@ async def root():
     """
     # Useful as a quick sanity endpoint for reverse proxy and app wiring checks.
     print("Root endpoint hit")
+    print(f"↩️ Returning root payload for {settings.app_name}")
     # Return basic application metadata
     return {"app": settings.app_name, "version": "0.1.0", "status": "ok"}
 
@@ -167,6 +175,7 @@ async def health():
     Used by Docker/Kubernetes liveness probes.
     """
     print("Health check (liveness) requested")
+    print("✅ Liveness check passed")
     return {"status": "healthy"}
 
 
