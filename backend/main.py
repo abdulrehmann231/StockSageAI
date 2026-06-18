@@ -13,6 +13,11 @@ import sys  # System-specific parameters and functions
 from contextlib import asynccontextmanager  # Provides utilities for managing async setup/teardown
 
 # Windows compatibility: Use Selector event loop instead of the default ProactorEventLoop
+# The ProactorEventLoop on Windows can have compatibility issues with:
+#   - SSL/TLS connections
+#   - Subprocess handling
+#   - Third-party async libraries
+# SelectorEventLoop is more compatible and stable for general use.
 if sys.platform == "win32":
     # This avoids occasional async/socket edge cases seen on Windows with Proactor.
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -35,17 +40,19 @@ from sqlalchemy import text  # Raw SQL execution helper
 # ---------------------------------------------------------------
 # Application imports - API route routers for different features
 # Each router maps to a distinct API path (e.g. /auth/*, /stocks/*)
+# Modular router structure allows independent development and testing.
+# Routers are included in app registration section below.
 # ---------------------------------------------------------------
-from api import alerts as alerts_router  # Stock price alert management
-from api import auth as auth_router  # User authentication and authorization
-from api import chat as chat_router  # AI-powered chat/assistant feature
-from api import news as news_router  # Financial news endpoints
-from api import prices as prices_router  # Stock price data endpoints
-from api import report as report_router  # Single stock report generation
-from api import reports as reports_router  # Batch reports endpoint
-from api import sentiment as sentiment_router  # Market sentiment analysis
-from api import stocks as stocks_router  # Stock search and discovery
-from api import watchlist as watchlist_router  # User watchlist management
+from api import alerts as alerts_router  # Stock price alert management - price thresholds
+from api import auth as auth_router  # User authentication and authorization - JWT tokens
+from api import chat as chat_router  # AI-powered chat/assistant feature - LLM integration
+from api import news as news_router  # Financial news endpoints - news aggregation
+from api import prices as prices_router  # Stock price data endpoints - OHLCV data
+from api import report as report_router  # Single stock report generation - detailed analysis
+from api import reports as reports_router  # Batch reports endpoint - multiple stocks
+from api import sentiment as sentiment_router  # Market sentiment analysis - social media
+from api import stocks as stocks_router  # Stock search and discovery - search/filter
+from api import watchlist as watchlist_router  # User watchlist management - tracked stocks
 
 # ---------------------------------------------------------------
 # Application imports - core configuration and utilities
@@ -146,20 +153,26 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 print("Rate limiter configured")
 
-# CORS configuration - allow requests from frontend origins
-# Keep this broad only in trusted environments; tighten in production where possible.
+# CORS (Cross-Origin Resource Sharing) configuration
+# Controls which external domains can make requests to this API.
+# Security note: allow_methods=["*"] permits all HTTP verbs (GET, POST, DELETE, etc.)
+#               If restricting to specific methods, list them explicitly: ["GET", "POST"]
+# Production recommendation: Keep origins list minimal, enumerate specific frontend URLs.
+# Current config pulls origins from environment variable (see core/config.py).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_origins_list,  # List of allowed frontend domains
+    allow_credentials=True,  # Allow cookies and credentials in cross-origin requests
+    allow_methods=["*"],     # Allow all HTTP methods
+    allow_headers=["*"],     # Allow all headers (auth tokens, content-type, etc.)
 )
 print("CORS middleware configured")
 
 # ---------------------------------------------------------------
-# Route registration
-# Each router maps to a feature area and is mounted with its own prefix.
+# Route registration and API endpoint setup
+# Each router is mounted with its feature-specific prefix (e.g., /auth, /stocks).
+# Order of registration does not affect routing priority (FastAPI handles this).
+# All registered routers are available immediately after app startup.
 # ---------------------------------------------------------------
 
 # Register all API routers
@@ -225,33 +238,44 @@ async def health_ready():
     Returns 200 if all dependencies are healthy, 503 if any are unavailable.
     This endpoint is typically used by container orchestration systems (Docker, Kubernetes)
     to determine if the service is ready to handle traffic.
+    
+    Difference from /health:
+    - /health: Just checks if app process is running (liveness)
+    - /health/ready: Checks if external dependencies are reachable (readiness)
     """
     from fastapi import HTTPException, status
     from db.session import SessionLocal
 
     # Track dependency health in a single response object for clear diagnostics.
+    # Orchestrators examine this object to make routing decisions.
     checks = {"database": "unknown", "redis": "unknown"}
     # Readiness probes are usually called by orchestrators before routing traffic.
     print("🔎 Readiness check requested")
 
     # Check database connectivity
+    # Tests the primary data store where all user data is persisted.
+    # SELECT 1 is a lightweight query that confirms the connection works.
     try:
         async with SessionLocal() as session:
-            await session.execute(text("SELECT 1"))
+            await session.execute(text("SELECT 1"))  # Minimal query to test connection
         checks["database"] = "healthy"
         print("✅ Database check: OK")
     except Exception as exc:
+        # Database down means we cannot serve any requests that read/write data
         logger.error("Database health check failed", extra={"error": str(exc)})
         checks["database"] = "unhealthy"
         print(f"❌ Database check failed: {exc}")
 
-    # Check Redis connectivity (used for caching)
+    # Check Redis connectivity (used for caching and rate limiting)
+    # Redis outage doesn't break core functionality but degrades performance.
     try:
         redis = cache_service.get_redis()
+        # PING command is the standard Redis healthcheck
         await redis.ping()
         checks["redis"] = "healthy"
         print("✅ Redis check: OK")
     except Exception as exc:
+        # Redis down means cache layer is unavailable, but app can still function
         logger.error("Redis health check failed", extra={"error": str(exc)})
         checks["redis"] = "unhealthy"
         print(f"❌ Redis check failed: {exc}")
@@ -261,7 +285,8 @@ async def health_ready():
     # Keep this summary log for quick triage during startup incidents.
     print(f"📋 Readiness summary: {checks}")
 
-    # Return 503 if any dependency is down
+    # Return 503 (Service Unavailable) if any critical dependency is down
+    # 503 tells load balancers to remove this instance from the rotation
     if not all_healthy:
         print(f"⚠️ Readiness check failed: {checks}")
         raise HTTPException(
@@ -269,5 +294,6 @@ async def health_ready():
             detail={"status": "unhealthy", "checks": checks},
         )
 
+    # 200 OK - all systems operational, safe to route traffic here
     print("💚 All systems ready - server can accept traffic")
     return {"status": "healthy", "checks": checks}
