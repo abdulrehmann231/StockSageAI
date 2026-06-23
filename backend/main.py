@@ -41,14 +41,19 @@ from db.session import Base, engine
 from services import cache_service
 
 # --- Bootstrap configuration ---
+# This block runs once at import time, before the ASGI server starts serving.
+# Order matters: logging is configured first so every subsequent step can log.
 # Initialize logging before anything else
+print("[init] Starting application bootstrap...")
 setup_logging()
 print("[init] Logging configured.")
 
+# Load cached application settings (env-driven) and a module-scoped logger.
 settings = get_settings()
 logger = get_logger(__name__)
 # Print once at import time so startup configuration is visible in local runs.
 print(f"[init] Loaded settings for app: {settings.app_name}")
+print(f"[init] Module {__name__} initialized; ready to build the app.")
 
 
 @asynccontextmanager
@@ -152,6 +157,8 @@ app.include_router(chat_router.router)
 app.include_router(watchlist_router.router)
 app.include_router(alerts_router.router)
 print("[init] All API routers registered.")
+# Bootstrap is complete; from here the ASGI server (e.g. uvicorn) takes over.
+print("[init] Application bootstrap complete. Awaiting server startup.")
 
 
 # --- API Endpoints ---
