@@ -70,6 +70,7 @@ async def lifespan(app: FastAPI):
     print("[startup] Database initialization completed.")
     logger.info("Database initialized")
     print("[startup] Application is ready to accept requests.")
+    logger.info("Application startup complete", extra={"app_name": settings.app_name, "version": "0.1.0"})
     yield
 
     # Shutdown phase overview:
@@ -87,6 +88,7 @@ async def lifespan(app: FastAPI):
     print("[shutdown] Closing browser pool (if active)...")
     await close_browser_pool()
     print("[shutdown] Application shutdown complete.")
+    logger.info("Application shutdown complete")
 
 
 app = FastAPI(
@@ -96,6 +98,7 @@ app = FastAPI(
 )
 # App object creation happens at import, before serving traffic.
 print("[init] FastAPI application instance created.")
+logger.info("FastAPI app instance created", extra={"title": settings.app_name, "version": "0.1.0"})
 
 # Middleware ordering note:
 # Request ID middleware runs first so downstream middleware and route handlers
@@ -147,6 +150,7 @@ async def root():
     """Root endpoint returning app info."""
     # Lightweight endpoint useful for quick smoke checks.
     print("[request] GET / called")
+    logger.info("Root endpoint hit", extra={"method": "GET", "path": "/"})
     print("[request] GET / responding with app metadata.")
     return {"app": settings.app_name, "version": "0.1.0", "status": "ok"}
 
@@ -156,6 +160,7 @@ async def health():
     """Basic health check endpoint."""
     # Liveness endpoint: service process is running.
     print("[request] GET /health called")
+    logger.info("Health endpoint hit", extra={"method": "GET", "path": "/health"})
     print("[request] GET /health responding healthy.")
     return {"status": "healthy"}
 
