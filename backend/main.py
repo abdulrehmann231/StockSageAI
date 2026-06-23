@@ -47,6 +47,8 @@ async def lifespan(app: FastAPI):
     """
     logger.info("Starting application", extra={"app_name": settings.app_name})
 
+    # Ensure required DB extension and schema are available at startup.
+    print("[startup] Creating database extensions and tables...")
     async with engine.begin() as conn:
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
         await conn.run_sync(Base.metadata.create_all)
@@ -56,10 +58,15 @@ async def lifespan(app: FastAPI):
 
     logger.info("Shutting down application")
     await cache_service.close()
+    print("[shutdown] Cache service closed.")
     await engine.dispose()
+    print("[shutdown] Database engine disposed.")
 
     from scrapers.browser_pool import close_browser_pool
     await close_browser_pool()
+    print("[shutdown] Browser pool closed.")
+    # All resources released, shutdown is complete.
+    print("[shutdown] Application shutdown complete.")
 
 
 app = FastAPI(
@@ -92,6 +99,8 @@ app.include_router(chat_router.router)
 app.include_router(watchlist_router.router)
 app.include_router(alerts_router.router)
 
+
+# --- API Endpoints ---
 
 @app.get("/")
 async def root():
