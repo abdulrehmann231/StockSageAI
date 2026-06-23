@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+# Third-party imports
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
@@ -27,6 +28,7 @@ from api import sentiment as sentiment_router
 from api import stocks as stocks_router
 from api import watchlist as watchlist_router
 
+# Internal imports
 from core.config import get_settings
 from core.limiter import limiter
 from core.logging import setup_logging
@@ -76,8 +78,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Attach a unique request ID to every incoming request
 app.add_middleware(RequestIdMiddleware)
 
+# Attach rate limiter state and exception handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -89,6 +93,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register all API route handlers
 app.include_router(auth_router.router)
 app.include_router(stocks_router.router)
 app.include_router(prices_router.router)
