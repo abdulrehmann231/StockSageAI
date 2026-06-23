@@ -3,12 +3,9 @@
 Sets up the application with middleware, routes, and database lifecycle.
 """
 
-# Standard library imports
 import asyncio
 import sys
 from contextlib import asynccontextmanager
-
-# Third-party imports
 
 # Windows-specific event loop note:
 # The selector policy tends to be more compatible with libraries that rely on
@@ -40,20 +37,15 @@ from core.middleware import RequestIdMiddleware
 from db.session import Base, engine
 from services import cache_service
 
-# --- Bootstrap configuration ---
-# This block runs once at import time, before the ASGI server starts serving.
-# Order matters: logging is configured first so every subsequent step can log.
 # Initialize logging before anything else
 print("[init] Starting application bootstrap...")
 setup_logging()
 print("[init] Logging configured.")
 
-# Load cached application settings (env-driven) and a module-scoped logger.
 settings = get_settings()
 logger = get_logger(__name__)
 # Print once at import time so startup configuration is visible in local runs.
 print(f"[init] Loaded settings for app: {settings.app_name}")
-print(f"[init] Module {__name__} initialized; ready to build the app.")
 
 
 @asynccontextmanager
@@ -157,13 +149,7 @@ app.include_router(chat_router.router)
 app.include_router(watchlist_router.router)
 app.include_router(alerts_router.router)
 print("[init] All API routers registered.")
-# Bootstrap is complete; from here the ASGI server (e.g. uvicorn) takes over.
-print("[init] Application bootstrap complete. Awaiting server startup.")
 
-
-# --- API Endpoints ---
-# Each route below is a public HTTP handler registered on the FastAPI app.
-# Logging at the start/end of each handler aids traceability in production.
 
 @app.get("/")
 async def root():
@@ -179,7 +165,6 @@ async def root():
 async def health():
     """Basic health check endpoint."""
     # Liveness endpoint: service process is running.
-    # Does NOT check dependencies — only confirms the app process is alive.
     print("[request] GET /health called")
     logger.info("Health endpoint hit", extra={"method": "GET", "path": "/health"})
     print("[request] GET /health responding healthy.")
