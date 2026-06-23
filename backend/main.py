@@ -3,62 +3,81 @@
 Sets up the application with middleware, routes, and database lifecycle.
 """
 
-import asyncio
-import sys
-from contextlib import asynccontextmanager
+# ---------------------------------------------------------------------------
+# Standard library imports
+# ---------------------------------------------------------------------------
+import asyncio   # Provides async I/O primitives and the event loop
+import sys       # Used for platform detection and system-level operations
+from contextlib import asynccontextmanager  # Enables async context manager syntax for lifespan
 
-print("[sys] Checking platform for event loop policy...")
+# ---------------------------------------------------------------------------
+# Windows event loop compatibility fix
+# ---------------------------------------------------------------------------
+# On Windows, the default ProactorEventLoop can cause issues with certain
+# async libraries (e.g., SQLAlchemy async engine). Switching to the
+# SelectorEventLoop resolves most of these compatibility problems.
 if sys.platform == "win32":
-    print("[sys] Windows detected — applying SelectorEventLoopPolicy.")
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    print("[sys] WindowsSelectorEventLoopPolicy applied.")
-else:
-    print(f"[sys] Non-Windows platform ({sys.platform}) — no event loop policy change needed.")
-print("[sys] Platform check complete.")
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from sqlalchemy import text
+# ---------------------------------------------------------------------------
+# Third-party imports
+# ---------------------------------------------------------------------------
+from fastapi import FastAPI                          # Core web framework
+from fastapi.middleware.cors import CORSMiddleware   # Handles cross-origin requests
+from slowapi import _rate_limit_exceeded_handler     # Custom 429 response handler
+from slowapi.errors import RateLimitExceeded         # Exception raised on rate limit breach
+from sqlalchemy import text                          # Allows raw SQL execution via SQLAlchemy
 
-from api import alerts as alerts_router
-from api import auth as auth_router
-from api import chat as chat_router
-from api import news as news_router
-from api import prices as prices_router
-from api import report as report_router
-from api import reports as reports_router
-from api import sentiment as sentiment_router
-from api import stocks as stocks_router
-from api import watchlist as watchlist_router
+# ---------------------------------------------------------------------------
+# Internal API router imports
+# ---------------------------------------------------------------------------
+# Each module below encapsulates a distinct domain of the API surface.
+# Importing them here keeps the composition root clean and explicit.
+from api import alerts as alerts_router      # Manages user price/event alerts
+from api import auth as auth_router          # Handles login, registration, and token management
+from api import chat as chat_router          # AI-powered chat and assistant features
+from api import news as news_router          # Aggregates and serves financial news
+from api import prices as prices_router      # Provides real-time and historical price data
+from api import report as report_router      # Generates individual stock reports
+from api import reports as reports_router    # Handles batch and historical report queries
+from api import sentiment as sentiment_router  # Analyzes and returns market sentiment scores
+from api import stocks as stocks_router      # Stock search, metadata, and lookup
+from api import watchlist as watchlist_router  # User watchlist CRUD operations
 
-from core.config import get_settings
-from core.limiter import limiter
-from core.logging import get_logger, setup_logging
-from core.middleware import RequestIdMiddleware
-from db.session import Base, engine
-from services import cache_service
+# ---------------------------------------------------------------------------
+# Core application module imports
+# ---------------------------------------------------------------------------
+from core.config import get_settings         # Loads config from env vars / .env file
+from core.limiter import limiter             # Shared rate limiter instance (SlowAPI)
+from core.logging import get_logger, setup_logging  # Structured logging setup
+from core.middleware import RequestIdMiddleware      # Attaches unique request IDs to each request
+from db.session import Base, engine          # SQLAlchemy declarative base and async engine
+from services import cache_service           # Redis-backed cache service abstraction
 
-print("[init] ========================================")
-print("[init] Starting StockTrust Backend Bootstrap...")
-print("[init] ========================================")
-
-print("[init] Step 1/5: Configuring logging subsystem...")
+# ---------------------------------------------------------------------------
+# Logging initialization
+# ---------------------------------------------------------------------------
+# Must be called before any logger is created so all log output is
+# formatted and routed correctly from the very start of the process.
 setup_logging()
-print("[init] Logging configured successfully.")
-print("[init] Step 1/5 complete.")
 
-print("[init] Step 2/5: Loading application settings...")
+# ---------------------------------------------------------------------------
+# Application settings
+# ---------------------------------------------------------------------------
+# Reads configuration from environment variables (and .env files).
+# Contains values like app name, CORS origins, DB URL, Redis URL, etc.
 settings = get_settings()
-print(f"[init] Settings loaded. App name: '{settings.app_name}', Version: 0.1.0")
-print(f"[init] CORS origins: {settings.cors_origins_list}")
 
+# Module-level logger — used for startup, shutdown, and top-level events.
 logger = get_logger(__name__)
-print(f"[init] Loaded settings for app: {settings.app_name}")
-print("[init] Step 2/5 complete.")
 
 
+# ===========================================================================
+# APPLICATION LIFESPAN
+# ===========================================================================
+# The lifespan context manager replaces the older @app.on_event("startup")
+# and @app.on_event("shutdown") pattern. It runs setup code before the first
+# request and teardown code after the last request (or on SIGTERM/SIGINT).
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler.
@@ -76,146 +95,110 @@ async def lifespan(app: FastAPI):
         3. Close the headless browser pool used by scrapers (if active).
     """
 
-    print("[startup] ========================================")
-    print(f"[startup] Booting {settings.app_name} v0.1.0...")
-    print("[startup] ========================================")
+    # --- STARTUP ---
     logger.info("Starting application", extra={"app_name": settings.app_name, "phase": "startup"})
 
-    print("[startup] --- Step 1/3: Database initialization ---")
-    print("[startup] Ensuring required DB extension (pgcrypto) and schema exist...")
-
+    # Open a transactional connection to the database for schema setup.
+    # CREATE EXTENSION IF NOT EXISTS is idempotent — safe to run every boot.
+    # Base.metadata.create_all synchronizes ORM model definitions to the DB.
     async with engine.begin() as conn:
-        print("[startup]   -> Creating pgcrypto extension (if not exists)...")
-        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
-        print("[startup]   -> pgcrypto extension ready.")
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))  # Required for UUID generation
+        await conn.run_sync(Base.metadata.create_all)  # Create tables if they don't exist
 
-        print("[startup]   -> Creating/updating database tables from models...")
-        await conn.run_sync(Base.metadata.create_all)
-        print("[startup]   -> Database schema synchronized.")
-
-    print("[startup] Database initialization completed.")
     logger.info("Database initialized and schema up-to-date",
                 extra={"phase": "startup", "component": "database"})
-    print("[startup] --- Step 1/3 complete ---")
 
-    print("[startup] --- Step 2/3: Cache service ---")
-    print("[startup] Cache service will initialize on first use (lazy).")
-    print("[startup] --- Step 2/3 complete ---")
-
-    print("[startup] --- Step 3/3: Finalizing ---")
-    print(f"[startup] {settings.app_name} is ready to accept requests.")
     logger.info("Application startup complete",
                 extra={"app_name": settings.app_name, "version": "0.1.0", "phase": "startup"})
-    print("[startup] ========================================")
-    print("[startup] Startup sequence finished successfully.")
-    print("[startup] ========================================")
 
+    # Yield control to FastAPI — the app now starts serving HTTP requests.
+    # Code below the yield runs only after the server begins shutting down.
     yield
 
-    print("[shutdown] ========================================")
-    print("[shutdown] Shutdown sequence started.")
-    print("[shutdown] ========================================")
+    # --- SHUTDOWN ---
     logger.info("Shutting down application", extra={"phase": "shutdown"})
 
-    print("[shutdown] --- Step 1/3: Closing cache service ---")
-    print("[shutdown]   -> Closing Redis cache connections...")
+    # Close the Redis connection pool gracefully.
+    # This ensures in-flight cache operations are completed before the process exits.
     await cache_service.close()
-    print("[shutdown]   -> Cache service closed.")
     logger.info("Cache service shut down", extra={"phase": "shutdown", "component": "cache"})
-    print("[shutdown] --- Step 1/3 complete ---")
 
-    print("[shutdown] --- Step 2/3: Disposing database engine ---")
-    print("[shutdown]   -> Disposing SQLAlchemy database engine...")
+    # Dispose of the SQLAlchemy engine, closing all pooled DB connections.
+    # This prevents connection leaks on restart or process termination.
     await engine.dispose()
-    print("[shutdown]   -> Database engine disposed.")
     logger.info("Database engine shut down", extra={"phase": "shutdown", "component": "database"})
-    print("[shutdown] --- Step 2/3 complete ---")
 
-    print("[shutdown] --- Step 3/3: Closing browser pool ---")
+    # Deferred import: not all deployments use the browser scraping feature.
+    # close_browser_pool() is a no-op if the pool was never initialized.
     from scrapers.browser_pool import close_browser_pool
-    print("[shutdown]   -> Closing headless browser pool (if active)...")
     await close_browser_pool()
-    print("[shutdown]   -> Browser pool closed.")
     logger.info("Browser pool shut down", extra={"phase": "shutdown", "component": "browser_pool"})
-    print("[shutdown] --- Step 3/3 complete ---")
 
-    print("[shutdown] All resources released successfully.")
-    print("[shutdown] Application shutdown complete.")
     logger.info("Application shutdown complete", extra={"phase": "shutdown"})
-    print("[shutdown] ========================================")
-    print("[shutdown] Goodbye.")
-    print("[shutdown] ========================================")
 
 
-print("[init] Step 3/5: Creating FastAPI application instance...")
+# ===========================================================================
+# FASTAPI APPLICATION INSTANCE
+# ===========================================================================
+# The app object is the ASGI application. It is created once at import time
+# and passed to the ASGI server (uvicorn). All middleware and routers are
+# attached to this object before any requests are served.
 app = FastAPI(
-    title=settings.app_name,
-    version="0.1.0",
-    lifespan=lifespan,
+    title=settings.app_name,   # Shown in the auto-generated OpenAPI docs
+    version="0.1.0",           # API version surfaced in /openapi.json
+    lifespan=lifespan,         # Wires up the startup/shutdown handler above
 )
-print("[init] FastAPI application instance created.")
 logger.info("FastAPI app instance created", extra={"title": settings.app_name, "version": "0.1.0"})
-print("[init] Step 3/5 complete.")
 
-print("[init] Step 4/5: Configuring middleware...")
+# ===========================================================================
+# MIDDLEWARE STACK
+# ===========================================================================
+# Middleware is applied in reverse registration order on the response path.
+# Registration order (request path): RequestId → RateLimit → CORS → handler
 
-print("[init]   -> Registering RequestIdMiddleware...")
+# Attach a unique request ID to every incoming request.
+# Downstream handlers and logs can reference this ID for tracing.
 app.add_middleware(RequestIdMiddleware)
-print("[init]   -> RequestIdMiddleware registered.")
 logger.info("RequestIdMiddleware installed", extra={"phase": "init", "component": "middleware"})
 
-print("[init]   -> Attaching rate limiter to app state...")
+# Attach the SlowAPI rate limiter to app state so route decorators can use it.
+# The exception handler converts rate limit violations into proper HTTP 429 responses.
 app.state.limiter = limiter
-print("[init]   -> Registering RateLimitExceeded exception handler...")
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-print("[init]   -> Rate limiter and exception handler configured.")
 logger.info("Rate limiter installed", extra={"phase": "init", "component": "rate_limiter"})
 
-print("[init]   -> Configuring CORS middleware...")
+# Configure CORS so browser clients from allowed origins can access the API.
+# allow_credentials=True is required to support cookie-based auth flows.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=settings.cors_origins_list,  # Loaded from config (env-specific)
+    allow_credentials=True,                    # Required for auth cookies / headers
+    allow_methods=["*"],                       # Allow all HTTP methods
+    allow_headers=["*"],                       # Allow all request headers
 )
-print(f"[init]   -> CORS configured for origins: {settings.cors_origins_list}")
 logger.info("CORS middleware installed", extra={"phase": "init", "component": "cors", "origins": settings.cors_origins_list})
 
-print("[init] Step 4/5 complete.")
-
-print("[init] Step 5/5: Registering API routers...")
-print("[init]   -> Registering auth routes...")
-app.include_router(auth_router.router)
-print("[init]   -> Registering stocks routes...")
-app.include_router(stocks_router.router)
-print("[init]   -> Registering prices routes...")
-app.include_router(prices_router.router)
-print("[init]   -> Registering sentiment routes...")
-app.include_router(sentiment_router.router)
-print("[init]   -> Registering news routes...")
-app.include_router(news_router.router)
-print("[init]   -> Registering report routes...")
-app.include_router(report_router.router)
-print("[init]   -> Registering reports routes...")
-app.include_router(reports_router.router)
-print("[init]   -> Registering chat routes...")
-app.include_router(chat_router.router)
-print("[init]   -> Registering watchlist routes...")
-app.include_router(watchlist_router.router)
-print("[init]   -> Registering alerts routes...")
-app.include_router(alerts_router.router)
-print("[init] All 10 API routers registered successfully.")
+# ===========================================================================
+# ROUTER REGISTRATION
+# ===========================================================================
+# Each router adds a group of related endpoints under its own prefix.
+# Registering all routers here creates a single, clear composition root.
+app.include_router(auth_router.router)       # /auth/*
+app.include_router(stocks_router.router)     # /stocks/*
+app.include_router(prices_router.router)     # /prices/*
+app.include_router(sentiment_router.router)  # /sentiment/*
+app.include_router(news_router.router)       # /news/*
+app.include_router(report_router.router)     # /report/*
+app.include_router(reports_router.router)    # /reports/*
+app.include_router(chat_router.router)       # /chat/*
+app.include_router(watchlist_router.router)  # /watchlist/*
+app.include_router(alerts_router.router)     # /alerts/*
 logger.info("All API routers registered", extra={"phase": "init", "router_count": 10})
-print("[init] Step 5/5 complete.")
-
-print("[init] ========================================")
-print("[init] Bootstrap complete! Application is fully configured.")
-print("[init] ========================================")
-print("[init] Waiting for ASGI server to start serving traffic...")
 
 
-print("[routes] Registering built-in endpoint: GET /")
+# ===========================================================================
+# BUILT-IN HTTP ENDPOINTS
+# ===========================================================================
 
 @app.get("/")
 async def root():
@@ -227,17 +210,14 @@ async def root():
       - API metadata discovery
       - Verifying the app is reachable and responding
     """
-    print("[request] GET / called — returning root metadata.")
     logger.info("Root endpoint hit", extra={"method": "GET", "path": "/"})
 
+    # Build and return a minimal metadata payload.
     response_data = {"app": settings.app_name, "version": "0.1.0", "status": "ok"}
 
-    print("[request] GET / responding with app metadata.")
     logger.info("Root response sent", extra={"path": "/", "status_code": 200})
     return response_data
 
-
-print("[routes] Registering built-in endpoint: GET /health")
 
 @app.get("/health")
 async def health():
@@ -250,15 +230,12 @@ async def health():
     Kubernetes and other orchestrators use this to decide if the pod should
     be restarted. If this endpoint fails, the process is considered dead.
     """
-    print("[request] GET /health called — liveness check.")
     logger.info("Health endpoint hit", extra={"method": "GET", "path": "/health"})
 
-    print("[request] GET /health responding healthy.")
+    # A 200 response here means the process is alive and serving requests.
     logger.info("Health response sent", extra={"path": "/health", "status_code": 200})
     return {"status": "healthy"}
 
-
-print("[routes] Registering built-in endpoint: GET /health/ready")
 
 @app.get("/health/ready")
 async def health_ready():
@@ -274,60 +251,53 @@ async def health_ready():
     Orchestrators use this to control traffic routing: a pod that fails
     readiness is removed from the load balancer until it recovers.
     """
+    # Deferred imports — only needed inside this endpoint.
     from fastapi import HTTPException, status
     from db.session import SessionLocal
 
-    print("[request] GET /health/ready called — readiness check.")
     logger.info("Readiness endpoint hit", extra={"method": "GET", "path": "/health/ready"})
 
+    # Track per-dependency health status. Values: "healthy" | "unhealthy" | "unknown".
     checks = {"database": "unknown", "redis": "unknown"}
 
-    print("[health/ready] Starting dependency readiness checks...")
-    print("[health/ready] Target dependencies: PostgreSQL, Redis")
-
-    print("[health/ready] --- Probing PostgreSQL ---")
-    print("[health/ready] Executing SELECT 1 on PostgreSQL...")
+    # --- PostgreSQL probe ---
+    # Run the simplest possible query to confirm DB connectivity and query execution.
     try:
         async with SessionLocal() as session:
-            await session.execute(text("SELECT 1"))
+            await session.execute(text("SELECT 1"))  # Lightweight connectivity check
         checks["database"] = "healthy"
-        print("[health/ready] PostgreSQL probe SUCCESS — database is reachable.")
         logger.info("Database readiness check passed", extra={"component": "database", "result": "healthy"})
     except Exception as exc:
+        # Log the raw exception so engineers can diagnose the root cause.
         logger.error("Database health check failed", extra={"error": str(exc)})
         checks["database"] = "unhealthy"
-        print(f"[health/ready] PostgreSQL probe FAILED — {exc}")
         logger.error("Database readiness check failed", extra={"component": "database", "result": "unhealthy", "error": str(exc)})
 
-    print("[health/ready] --- Probing Redis ---")
-    print("[health/ready] Sending PING to Redis...")
+    # --- Redis probe ---
+    # Send a PING command — the fastest way to confirm Redis is reachable.
     try:
         redis = cache_service.get_redis()
-        await redis.ping()
+        await redis.ping()  # Raises if Redis is unreachable or misconfigured
         checks["redis"] = "healthy"
-        print("[health/ready] Redis probe SUCCESS — cache is reachable.")
         logger.info("Redis readiness check passed", extra={"component": "redis", "result": "healthy"})
     except Exception as exc:
         logger.error("Redis health check failed", extra={"error": str(exc)})
         checks["redis"] = "unhealthy"
-        print(f"[health/ready] Redis probe FAILED — {exc}")
         logger.error("Redis readiness check failed", extra={"component": "redis", "result": "unhealthy", "error": str(exc)})
 
+    # Aggregate: all dependencies must be healthy for the pod to be considered ready.
     all_healthy = all(v == "healthy" for v in checks.values())
-    print(f"[health/ready] ========================================")
-    print(f"[health/ready] Readiness check results: {checks}")
-    print(f"[health/ready] Overall status: {'HEALTHY' if all_healthy else 'UNHEALTHY'}")
-    print(f"[health/ready] ========================================")
     logger.info("Readiness check complete", extra={"checks": checks, "all_healthy": all_healthy})
 
     if not all_healthy:
-        print("[health/ready] One or more dependencies unhealthy — returning HTTP 503.")
+        # Return HTTP 503 so the load balancer stops routing traffic here.
+        # This is a temporary state — the next probe will re-evaluate readiness.
         logger.warning("Readiness check failed, returning 503", extra={"checks": checks})
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"status": "unhealthy", "checks": checks},
         )
 
-    print("[health/ready] All dependencies healthy — returning HTTP 200.")
+    # All dependencies healthy — return 200 to signal the pod is ready for traffic.
     logger.info("Readiness check passed, returning 200", extra={"checks": checks})
     return {"status": "healthy", "checks": checks}
