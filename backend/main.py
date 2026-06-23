@@ -1,8 +1,3 @@
-"""FastAPI application entry point.
-
-Sets up the application with middleware, routes, and database lifecycle.
-"""
-
 import asyncio
 import sys
 from contextlib import asynccontextmanager
@@ -43,21 +38,6 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler.
-
-    Initializes database schema on startup and cleans up connections on shutdown.
-
-    Startup sequence:
-        1. Log the boot event for operator visibility.
-        2. Ensure the pgcrypto PostgreSQL extension exists.
-        3. Create/update all database tables from SQLAlchemy ORM metadata.
-
-    Shutdown sequence:
-        1. Close the Redis cache connection pool.
-        2. Dispose of the SQLAlchemy database engine (closes all DB connections).
-        3. Close the headless browser pool used by scrapers (if active).
-    """
-
     async with engine.begin() as conn:
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
         await conn.run_sync(Base.metadata.create_all)
@@ -108,46 +88,17 @@ app.include_router(alerts_router.router)
 
 @app.get("/")
 async def root():
-    """Root endpoint returning app info.
-
-    This is the most basic endpoint in the application. It returns the app
-    name, version, and a status field. Useful for:
-      - Quick smoke tests after deployment
-      - API metadata discovery
-      - Verifying the app is reachable and responding
-    """
     response_data = {"app": settings.app_name, "version": "0.1.0", "status": "ok"}
     return response_data
 
 
 @app.get("/health")
 async def health():
-    """Basic health check endpoint.
-
-    Liveness endpoint: confirms the service process is running and the ASGI
-    server is accepting connections. This does NOT check external dependencies
-    (database, Redis, etc.) — that is the responsibility of /health/ready.
-
-    Kubernetes and other orchestrators use this to decide if the pod should
-    be restarted. If this endpoint fails, the process is considered dead.
-    """
     return {"status": "healthy"}
 
 
 @app.get("/health/ready")
 async def health_ready():
-    """Readiness check that verifies database and Redis connectivity.
-
-    Returns 503 if any dependency is unavailable.
-
-    While /health confirms the process is alive, /health/ready confirms the
-    application can actually serve requests. It probes:
-      1. PostgreSQL — via a lightweight SELECT 1 query
-      2. Redis — via a PING command
-
-    Orchestrators use this to control traffic routing: a pod that fails
-    readiness is removed from the load balancer until it recovers.
-    """
     from fastapi import HTTPException, status
     from db.session import SessionLocal
 
