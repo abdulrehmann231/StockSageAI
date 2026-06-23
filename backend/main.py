@@ -3,9 +3,12 @@
 Sets up the application with middleware, routes, and database lifecycle.
 """
 
+# Standard library imports
 import asyncio
 import sys
 from contextlib import asynccontextmanager
+
+# Third-party imports
 
 # Windows-specific event loop note:
 # The selector policy tends to be more compatible with libraries that rely on
@@ -37,6 +40,7 @@ from core.middleware import RequestIdMiddleware
 from db.session import Base, engine
 from services import cache_service
 
+# --- Bootstrap configuration ---
 # Initialize logging before anything else
 setup_logging()
 print("[init] Logging configured.")
@@ -151,6 +155,8 @@ print("[init] All API routers registered.")
 
 
 # --- API Endpoints ---
+# Each route below is a public HTTP handler registered on the FastAPI app.
+# Logging at the start/end of each handler aids traceability in production.
 
 @app.get("/")
 async def root():
@@ -166,6 +172,7 @@ async def root():
 async def health():
     """Basic health check endpoint."""
     # Liveness endpoint: service process is running.
+    # Does NOT check dependencies — only confirms the app process is alive.
     print("[request] GET /health called")
     logger.info("Health endpoint hit", extra={"method": "GET", "path": "/health"})
     print("[request] GET /health responding healthy.")
