@@ -44,6 +44,9 @@ openai==1.54.3
 anthropic==0.39.0
 
 # --- Vector DB ---
+# pgvector is the primary store (Supabase-native; no separate service).
+# pinecone-client kept optional for a managed alternative.
+pgvector==0.3.6
 pinecone-client==5.0.1
 
 # --- Reddit ---

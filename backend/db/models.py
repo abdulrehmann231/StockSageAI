@@ -3,6 +3,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
+
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -357,4 +359,82 @@ class PortfolioAnalysis(Base):
             "health_score BETWEEN 0 AND 100",
             name="ck_analyses_health_score",
         ),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4 — filings RAG (plan § 4.6)
+# --------------------------------------------------------------------------- #
+
+EMBEDDING_DIM = 768  # Gemini text-embedding-004
+
+
+class Filing(Base):
+    """A single source document (a 10-K/10-Q for US, an annual report for PSX).
+
+    Indexing is idempotent on ``(ticker, source, external_id)`` so re-running the
+    pipeline updates rather than duplicates. ``chunk_count`` and ``indexed_at``
+    let the API report status without scanning every chunk.
+    """
+
+    __tablename__ = "filings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    ticker: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("stocks.ticker", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    market: Mapped[str] = mapped_column(String, nullable=False)
+    source: Mapped[str] = mapped_column(String, nullable=False)  # "sec_edgar" | "psx"
+    filing_type: Mapped[str | None] = mapped_column(String, nullable=True)  # 10-K, 10-Q, annual
+    fiscal_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    url: Mapped[str | None] = mapped_column(String, nullable=True)
+    external_id: Mapped[str | None] = mapped_column(String, nullable=True)  # accession no., etc.
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    indexed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("ticker", "source", "external_id", name="uq_filings_identity"),
+    )
+
+
+class FilingChunk(Base):
+    """An embedded slice of a filing — the unit of vector retrieval."""
+
+    __tablename__ = "filing_chunks"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    filing_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("filings.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ticker: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("stocks.ticker", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    market: Mapped[str] = mapped_column(String, nullable=False)
+    chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(String, nullable=False)
+    section: Mapped[str | None] = mapped_column(String, nullable=True)
+    page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

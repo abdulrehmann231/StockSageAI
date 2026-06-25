@@ -38,6 +38,7 @@ from main import app  # noqa: E402
 async def prepare_database():
     async with engine.begin() as conn:
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "vector"'))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield

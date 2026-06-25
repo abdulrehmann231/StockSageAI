@@ -199,9 +199,56 @@ Per plan § 4.5 / § 4.7: scrape Business Recorder / Dawn / Profit Pakistan for 
 > Note: two unrelated **pre-existing** test failures (stale after earlier refactors) were also fixed so the full suite runs clean — `tests/test_psx_scraper.py` imported the renamed `_read_52w_range`/`_read_stats` helpers (now `_read_all_stats` + `_extract_52w_range`), and `tests/test_stocks.py` still expected a bare list from `/api/stocks` after that endpoint moved to a paginated `{items, meta}` shape. **Full backend suite: 153 passed, 8 deselected (live).**
 ---
 
-## Phase 4 — Filings RAG Agent ⏳
+## Phase 4 — Filings RAG Agent ✅ (backend)
 
-Not started. Per plan § 4.6: SEC EDGAR + PSX annual reports → Pinecone embeddings → grounded Q&A. **Natural home for remaining PSX fundamentals (detailed market cap, EPS history, dividend payouts).**
+Per plan § 4.6: SEC EDGAR (US) + PSX disclosures → embeddings → **pgvector** → grounded Q&A with citations. Built on a **free + deployable** stack — **Gemini** embeddings + **pgvector** (Supabase-native), no Pinecone, no OpenAI key, no PyTorch in the image.
+
+### Embedding service (`backend/services/embedding_service.py`)
+
+- Gemini `text-embedding-004` (768-dim) via its **OpenAI-compatible endpoint** — reuses the existing `AsyncOpenAI` client, no new SDK.
+- **Two-key rotation:** reads `GEMINI_API_KEY` + `GEMINI_API_KEY_2` (and optional `GEMINI_API_KEYS`), round-robins per batch and fails over on error → ~2× the free-tier rate limit for the bulk indexing pass.
+- **Deterministic offline fallback:** with no key configured, returns a hashing bag-of-words vector (L2-normalised) so retrieval is still meaningful in CI/tests and the pipeline never hard-fails. Verified: shared-vocabulary texts score higher cosine similarity than unrelated ones.
+
+### Vector store (`backend/db/models.py` + `backend/services/filings_store.py`)
+
+- New `Filing` (idempotent on `(ticker, source, external_id)`) and `FilingChunk` (with a `Vector(768)` column) models. `CREATE EXTENSION vector` is run in the app lifespan + test conftest; pgvector built from source locally to match Supabase prod.
+- `upsert_filing` / `replace_chunks` (re-index replaces, never duplicates — verified) / `search` (pgvector **cosine distance**, `1 - distance` similarity since embeddings are unit-norm) / `filing_status`.
+
+### Ingestion (`backend/scrapers/` + `backend/services/filings_index.py`)
+
+- `sec_edgar.py` — SEC's **free** JSON API (no key, just a descriptive User-Agent): `company_tickers.json` → CIK, `submissions` → latest 10-K/10-Q, fetch primary doc, strip HTML → text (capped at 40k words). **Live-verified** against the real API (fetched a current AAPL 10-Q, 10k+ words). Degrades to `[]` on any failure.
+- `psx_filings.py` — best-effort PSX company-disclosure scraper; returns `[]` gracefully when nothing parseable (PSX has no clean text API — flagged in the plan as "the hard part"). The pipeline/RAG runtime are source-agnostic, so PSX coverage improves purely by strengthening this fetcher.
+- `filings_common.py` — `clean_text` + overlapping word-window `chunk_text` (~750 words / 150 overlap ≈ plan's 1000-token/200-overlap).
+- `filings_index.index_ticker` — fetch → chunk → embed → upsert, returns a per-filing summary; callable from the API or a future Celery refresh job.
+
+### RAG agent (`backend/agents/filings_agent.py`)
+
+- `answer_question` — embed query → pgvector top-k → grounded LLM answer **with `[10-K FY2025]`-style citations** via `llm_service.answer_from_filings`. The LLM is instructed to answer only from the excerpts. **Extractive fallback** (quote the most-relevant chunk) when no LLM key is set, so it works offline. Clean "nothing indexed yet" path.
+- `auto_analysis` — the plan's five auto questions (revenue trend, profit margin, debt level, risks, outlook) compiled into a structured `FilingsData`.
+- `llm_service.answer_from_filings` + `_resolve_chat_provider`: prefers OpenRouter when set, **else uses Gemini directly** (`gemini-2.0-flash`) — so the two Gemini keys also power the LLM with no OpenRouter account needed.
+
+### REST endpoints (`backend/api/filings.py`, registered in `main.py`)
+
+All auth-gated; ticker/market resolved from the stocks table to route SEC vs PSX:
+
+- `POST /api/filings/{ticker}/index` (`{limit}`) — fetch + index.
+- `GET  /api/filings/{ticker}/status` — indexed filing/chunk counts.
+- `POST /api/filings/{ticker}/ask` (`{question, k}`) — grounded Q&A.
+- `GET  /api/filings/{ticker}/analysis` — the five key-question answers.
+
+### Tests
+
+- **15 new offline tests** (`test_filings_rag.py`): chunker overlap/empty, clean_text, embedding determinism + shared-vocab ranking, pgvector upsert/search ranking, re-index-replaces-not-duplicates, index pipeline (stubbed SEC), no-documents path, PSX routing, RAG no-index/extractive-fallback paths + citation tags, and the API contract (auth, index→status→ask, 404).
+- **Full backend suite: 302 passed, 8 deselected (live).** No regressions in the prior 287.
+
+### Phase 4 — closed out (backend)
+
+- ~~SEC EDGAR ingestion + chunking + embedding + vector upsert.~~ ✅ (free API, live-verified.)
+- ~~Vector store + similarity retrieval.~~ ✅ (pgvector cosine.)
+- ~~RAG runtime: grounded answers with citations + five auto questions.~~ ✅
+- ~~REST endpoints.~~ ✅
+
+**Deferred (intentional):** richer SEC text extraction (strip leading iXBRL/XBRL fact noise from newer primary docs), robust PSX PDF extraction (`pypdf` + LLM cleanup per plan), Celery weekly re-index job, frontend filings panel, and migrating off auto-`create_all` to Alembic before prod.
 
 ---
 

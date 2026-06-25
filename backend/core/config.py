@@ -48,7 +48,10 @@ class Settings(BaseSettings):
     # LLM providers (all optional at scaffold stage)
     openrouter_api_key: str | None = None
     openai_api_key: str | None = None
+    # Gemini powers embeddings (text-embedding-004) + can power the LLM agents.
+    # Two keys are round-robined to double the free-tier rate limit.
     gemini_api_key: str | None = None
+    gemini_api_key_2: str | None = None
     groq_api_key: str | None = None
 
     # Reddit (Sentiment Agent — optional; agent skips Reddit when unset)

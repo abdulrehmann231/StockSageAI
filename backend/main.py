@@ -19,6 +19,7 @@ from sqlalchemy import text
 from api import alerts as alerts_router
 from api import auth as auth_router
 from api import chat as chat_router
+from api import filings as filings_router
 from api import news as news_router
 from api import portfolio as portfolio_router
 from api import prices as prices_router
@@ -59,6 +60,7 @@ async def lifespan(app: FastAPI):
 
     async with engine.begin() as conn:
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "pgcrypto"'))
+        await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "vector"'))
         await conn.run_sync(Base.metadata.create_all)
 
     yield
@@ -101,6 +103,7 @@ app.include_router(chat_router.router)
 app.include_router(watchlist_router.router)
 app.include_router(alerts_router.router)
 app.include_router(portfolio_router.router)
+app.include_router(filings_router.router)
 
 
 @app.get("/")

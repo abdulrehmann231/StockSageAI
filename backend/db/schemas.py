@@ -404,3 +404,52 @@ class PortfolioAnalysisOut(BaseModel):
     analysis_data: dict[str, Any]
     recommendations: dict[str, Any] | None = None
     created_at: datetime
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4 — Filings RAG (plan § 4.6)
+# --------------------------------------------------------------------------- #
+
+
+class FilingsIndexRequest(BaseModel):
+    limit: int = Field(default=1, ge=1, le=5)
+
+
+class FilingsAskRequest(BaseModel):
+    question: str = Field(min_length=3, max_length=500)
+    k: int = Field(default=5, ge=1, le=15)
+
+
+class FilingCitation(BaseModel):
+    citation: str
+    filing_type: str | None = None
+    fiscal_year: int | None = None
+    section: str | None = None
+    page: int | None = None
+    url: str | None = None
+    similarity: float
+    excerpt: str
+
+
+class FilingsAnswer(BaseModel):
+    model_config = ConfigDict(protected_namespaces=())
+
+    ticker: str
+    question: str
+    answer: str
+    citations: list[FilingCitation] = Field(default_factory=list)
+    grounded: bool = False
+    model_used: str | None = None
+    fetched_at: datetime
+
+
+class FilingsData(BaseModel):
+    """Compiled answers to the five auto-generated key questions."""
+
+    ticker: str
+    market: str
+    indexed: bool
+    filing_count: int
+    chunk_count: int
+    answers: dict[str, FilingsAnswer] = Field(default_factory=dict)
+    fetched_at: datetime

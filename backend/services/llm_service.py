@@ -439,6 +439,75 @@ async def analyze_portfolio(*, payload: dict[str, Any]) -> dict[str, Any] | None
         return None
 
 
+GEMINI_OPENAI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+
+def _resolve_chat_provider() -> tuple[str, str, list[str]] | None:
+    """Pick a chat provider: OpenRouter if configured, else Gemini (free tier).
+
+    Returns ``(api_key, base_url, model_chain)`` or ``None`` when neither is
+    configured so callers can fall back to a deterministic path. Gemini's
+    OpenAI-compatible endpoint lets us reuse the same ``AsyncOpenAI`` client.
+    """
+    openrouter_key = os.getenv("OPENROUTER_API_KEY")
+    if openrouter_key:
+        return openrouter_key, OPENROUTER_BASE_URL, _report_model_chain()
+
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY_2")
+    if gemini_key:
+        model = os.getenv("GEMINI_CHAT_MODEL", "gemini-2.0-flash")
+        return gemini_key, GEMINI_OPENAI_BASE_URL, [model]
+    return None
+
+
+async def answer_from_filings(
+    *,
+    ticker: str,
+    question: str,
+    chunks: list[dict[str, Any]],
+) -> str | None:
+    """Answer a question grounded in retrieved filing chunks (RAG, plan § 4.6).
+
+    ``chunks`` is a list of ``{"content": ..., "citation": ...}`` dicts. Returns
+    the grounded answer text, or ``None`` when no LLM provider is configured / the
+    call fails so the caller can fall back to a quote-the-top-chunk answer.
+    """
+    provider = _resolve_chat_provider()
+    if provider is None or not chunks:
+        return None
+    api_key, base_url, model_chain = provider
+
+    context = "\n\n".join(
+        f"[{c.get('citation', f'chunk {i}')}]\n{c.get('content', '')}"
+        for i, c in enumerate(chunks)
+    )
+    system_prompt = (
+        "You are StockSage AI's Filings Analyst. Answer the user's question "
+        f"about {ticker} using ONLY the filing excerpts below. Cite the bracketed "
+        "source tag (e.g. [10-K FY2024]) after each claim. If the excerpts do not "
+        "contain the answer, say so in one sentence — never invent figures. Be "
+        "concise: 2-5 sentences, plain prose.\n\n"
+        f"Filing excerpts:\n{context}"
+    )
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": question},
+    ]
+
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+    try:
+        response, _model = await _create_chat_completion(
+            client, messages, model_chain=model_chain
+        )
+        if not response.choices or response.choices[0].message is None:
+            raise ValueError("Filings LLM returned no message")
+        text = (response.choices[0].message.content or "").strip()
+        return text or None
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Filings LLM call failed; falling back to extractive: %s", exc)
+        return None
+
+
 async def _create_news_completion(client: AsyncOpenAI, messages: list[dict[str, str]]) -> Any:
     return await _create_completion(
         client, messages, model_chain=_news_model_chain(), max_tokens=900
