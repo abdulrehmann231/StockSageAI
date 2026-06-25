@@ -1,16 +1,18 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
     Numeric,
     String,
+    UniqueConstraint,
     func,
     text,
 )
@@ -200,5 +202,159 @@ class Alert(Base):
             "alert_type IN ('PRICE_DROP', 'PRICE_RISE', 'PRICE_TARGET', "
             "'BIG_NEWS', 'SENTIMENT_SHIFT')",
             name="ck_alerts_type",
+        ),
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Phase 7 — portfolio tracker (plan § 4.15)
+# --------------------------------------------------------------------------- #
+
+
+class Holding(Base):
+    """A current position a user holds in a single ticker.
+
+    Multiple lots of the same stock are allowed (bought ENGRO at 280, then at
+    320 — both tracked as separate rows). ``avg_buy_price`` is the per-lot cost
+    basis. Marking a holding sold flips ``is_active`` to ``False`` so it drops
+    out of live P&L while remaining for tax/transaction history.
+    """
+
+    __tablename__ = "holdings"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    ticker: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("stocks.ticker", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    quantity: Mapped[float] = mapped_column(Numeric(asdecimal=False), nullable=False)
+    avg_buy_price: Mapped[float] = mapped_column(Numeric(asdecimal=False), nullable=False)
+    buy_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("quantity > 0", name="ck_holdings_quantity_positive"),
+        CheckConstraint("avg_buy_price > 0", name="ck_holdings_price_positive"),
+    )
+
+
+class Transaction(Base):
+    """An immutable buy/sell event. Adding a holding auto-logs a BUY."""
+
+    __tablename__ = "transactions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    holding_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("holdings.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    ticker: Mapped[str] = mapped_column(
+        String,
+        ForeignKey("stocks.ticker", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    transaction_type: Mapped[str] = mapped_column(String, nullable=False)
+    quantity: Mapped[float] = mapped_column(Numeric(asdecimal=False), nullable=False)
+    price: Mapped[float] = mapped_column(Numeric(asdecimal=False), nullable=False)
+    transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
+    fees: Mapped[float] = mapped_column(Numeric(asdecimal=False), default=0, nullable=False)
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "transaction_type IN ('BUY', 'SELL')",
+            name="ck_transactions_type",
+        ),
+    )
+
+
+class PortfolioSnapshot(Base):
+    """Daily snapshot of a user's portfolio value — powers the perf chart."""
+
+    __tablename__ = "portfolio_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    total_value: Mapped[float] = mapped_column(Numeric(asdecimal=False), nullable=False)
+    total_cost_basis: Mapped[float] = mapped_column(Numeric(asdecimal=False), nullable=False)
+    total_gain_loss: Mapped[float] = mapped_column(Numeric(asdecimal=False), nullable=False)
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False)
+    breakdown: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "snapshot_date", name="uq_snapshot_user_date"),
+    )
+
+
+class PortfolioAnalysis(Base):
+    """A persisted AI rebalancing analysis produced by the Portfolio Analyst Agent."""
+
+    __tablename__ = "portfolio_analyses"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    health_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    analysis_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    recommendations: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "health_score BETWEEN 0 AND 100",
+            name="ck_analyses_health_score",
         ),
     )

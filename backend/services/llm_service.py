@@ -378,6 +378,67 @@ async def synthesize_report(*, payload: dict[str, Any]) -> dict[str, Any] | None
         return None
 
 
+async def analyze_portfolio(*, payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Synthesize holistic portfolio advice from a condensed portfolio summary.
+
+    ``payload`` is the small JSON-safe dict produced by
+    ``agents.portfolio_analyst_agent._maybe_llm``. Returns the parsed model
+    response (with the chosen model echoed under ``_model``) or ``None`` when no
+    API key is configured / the LLM is unavailable so the caller can fall back to
+    the deterministic analysis.
+    """
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        return None
+
+    prompt = (
+        "You are StockSage AI's Portfolio Analyst — a senior portfolio manager. "
+        "Read the portfolio summary JSON (risk profile, aggregate metrics, "
+        "per-position weights, holdings, and any individual stock verdicts) and "
+        "give holistic, actionable advice.\n"
+        "Rules:\n"
+        "- Base every claim on the provided JSON; never invent tickers, prices, "
+        "or weights.\n"
+        "- health_score is an integer 0-100 reflecting diversification, "
+        "concentration, risk-profile match, and performance. The "
+        "'suggested_health_score' is a deterministic baseline you may adjust.\n"
+        "- summary: 2-4 sentences of plain prose, no bullets or headings.\n"
+        "- strengths, weaknesses, recommendations: arrays of up to 5 short, "
+        "specific strings. Recommendations must be concrete actions "
+        "(e.g. 'Trim ENGRO from 35% to under 25%').\n"
+        "- Flag any single position above 25% of the portfolio as a "
+        "concentration risk.\n"
+        "Return strict JSON only with this exact shape: "
+        '{"health_score":72,"summary":"...","strengths":["..."],'
+        '"weaknesses":["..."],"recommendations":["..."]}.\n\n'
+        f"Portfolio:\n{json.dumps(payload, ensure_ascii=True, default=str)}"
+    )
+
+    client = AsyncOpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+    messages = [
+        {"role": "system", "content": "Return only valid JSON. Do not include markdown."},
+        {"role": "user", "content": prompt},
+    ]
+
+    try:
+        response, model_used = await _create_completion_with_model(
+            client,
+            messages,
+            model_chain=_report_model_chain(),
+            max_tokens=900,
+        )
+        if not response.choices or response.choices[0].message is None:
+            raise ValueError("LLM response did not contain a message")
+        raw_content = response.choices[0].message.content or "{}"
+        parsed = json.loads(_extract_json_object(raw_content))
+        if isinstance(parsed, dict):
+            parsed["_model"] = model_used
+        return parsed
+    except Exception as exc:  # noqa: BLE001
+        logger.info("Portfolio LLM analysis failed; using deterministic fallback: %s", exc)
+        return None
+
+
 async def _create_news_completion(client: AsyncOpenAI, messages: list[dict[str, str]]) -> Any:
     return await _create_completion(
         client, messages, model_chain=_news_model_chain(), max_tokens=900

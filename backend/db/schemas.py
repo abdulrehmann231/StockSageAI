@@ -258,3 +258,149 @@ class AlertEngineRunResult(BaseModel):
     fired: list[AlertFiredEvent]
     errors: list[str] = Field(default_factory=list)
     skipped_cooldown: int = 0
+
+
+# --------------------------------------------------------------------------- #
+# Phase 7 — Portfolio tracker (plan § 4.15)
+# --------------------------------------------------------------------------- #
+
+
+TransactionType = Literal["BUY", "SELL"]
+
+
+class HoldingCreateRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=20)
+    quantity: float = Field(gt=0)
+    avg_buy_price: float = Field(gt=0)
+    buy_date: date | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class HoldingUpdateRequest(BaseModel):
+    quantity: float | None = Field(default=None, gt=0)
+    avg_buy_price: float | None = Field(default=None, gt=0)
+    buy_date: date | None = None
+    notes: str | None = Field(default=None, max_length=2000)
+    is_active: bool | None = None
+
+
+class HoldingOut(BaseModel):
+    """A holding enriched with live P&L (computed by the portfolio service)."""
+
+    id: uuid.UUID
+    ticker: str
+    name: str | None = None
+    market: str
+    sector: str | None = None
+    currency: str | None = None
+    quantity: float
+    avg_buy_price: float
+    buy_date: date | None = None
+    notes: str | None = None
+    is_active: bool
+
+    # Live P&L — None when the price could not be fetched.
+    current_price: float | None = None
+    current_value: float | None = None
+    cost_basis: float = 0.0
+    gain_loss: float | None = None
+    gain_loss_pct: float | None = None
+    is_delisted: bool = False
+    price_error: str | None = None
+
+
+class PortfolioMetrics(BaseModel):
+    """Aggregate, portfolio-wide numbers."""
+
+    total_value: float = 0.0
+    total_cost_basis: float = 0.0
+    total_gain_loss: float = 0.0
+    total_gain_loss_pct: float = 0.0
+    day_change: float = 0.0
+    holdings_count: int = 0
+    priced_count: int = 0
+    best_performer: dict[str, Any] | None = None
+    worst_performer: dict[str, Any] | None = None
+    sector_allocation: dict[str, float] = Field(default_factory=dict)
+    market_allocation: dict[str, float] = Field(default_factory=dict)
+
+
+class PortfolioOut(BaseModel):
+    """Full portfolio: enriched holdings + aggregate metrics."""
+
+    holdings: list[HoldingOut] = Field(default_factory=list)
+    metrics: PortfolioMetrics = Field(default_factory=PortfolioMetrics)
+    errors: list[str] = Field(default_factory=list)
+    fetched_at: datetime
+
+
+class TransactionCreateRequest(BaseModel):
+    ticker: str = Field(min_length=1, max_length=20)
+    transaction_type: TransactionType
+    quantity: float = Field(gt=0)
+    price: float = Field(gt=0)
+    transaction_date: date
+    fees: float = Field(default=0, ge=0)
+    notes: str | None = Field(default=None, max_length=2000)
+
+
+class TransactionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    ticker: str
+    transaction_type: TransactionType
+    quantity: float
+    price: float
+    transaction_date: date
+    fees: float
+    notes: str | None = None
+    created_at: datetime
+
+
+class TaxLotEstimate(BaseModel):
+    holding_id: uuid.UUID
+    ticker: str
+    market: str
+    quantity: float
+    cost_basis: float
+    current_value: float | None = None
+    gain_loss: float | None = None
+    holding_period_days: int | None = None
+    is_long_term: bool | None = None
+    tax_rate_pct: float | None = None
+    estimated_tax: float | None = None
+    near_long_term_threshold: bool = False
+    note: str | None = None
+
+
+class TaxEstimateOut(BaseModel):
+    """Estimated capital-gains tax liability if everything were sold today."""
+
+    lots: list[TaxLotEstimate] = Field(default_factory=list)
+    total_estimated_tax: float = 0.0
+    total_gain_loss: float = 0.0
+    currency_note: str | None = None
+    fetched_at: datetime
+
+
+class PerformancePoint(BaseModel):
+    snapshot_date: date
+    total_value: float
+    total_cost_basis: float
+    total_gain_loss: float
+
+
+class PerformanceOut(BaseModel):
+    range: str
+    points: list[PerformancePoint] = Field(default_factory=list)
+
+
+class PortfolioAnalysisOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    health_score: int
+    analysis_data: dict[str, Any]
+    recommendations: dict[str, Any] | None = None
+    created_at: datetime

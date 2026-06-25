@@ -20,6 +20,7 @@ from api import alerts as alerts_router
 from api import auth as auth_router
 from api import chat as chat_router
 from api import news as news_router
+from api import portfolio as portfolio_router
 from api import prices as prices_router
 from api import report as report_router
 from api import reports as reports_router
@@ -99,6 +100,7 @@ app.include_router(reports_router.router)
 app.include_router(chat_router.router)
 app.include_router(watchlist_router.router)
 app.include_router(alerts_router.router)
+app.include_router(portfolio_router.router)
 
 
 @app.get("/")

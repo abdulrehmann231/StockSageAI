@@ -328,9 +328,69 @@ Layered on top of the Phase-5 orchestrator:
 
 ---
 
-## Phase 7 — Portfolio Tracker ⏳
+## Phase 7 — Portfolio Tracker ✅ (backend)
 
-Not started.
+Per plan § 4.15: manual holdings, live P&L, portfolio-wide metrics, transaction
+history + CSV export, daily snapshots → performance chart, the 6th agent
+(Portfolio Analyst), and capital-gains tax estimation. Backend-only PR; the API
+contract is set for the frontend pages.
+
+### DB schema (plan § 4.15)
+
+New SQLAlchemy models in `backend/db/models.py`, all FK-cascaded off the user:
+
+- `Holding(id, user_id, ticker, quantity, avg_buy_price, buy_date, notes, is_active, created_at, updated_at)` — CHECK `quantity > 0` and `avg_buy_price > 0`. Multiple lots of the same stock allowed; `is_active=False` retires a sold lot from live P&L while keeping it for history.
+- `Transaction(id, user_id, holding_id, ticker, transaction_type, quantity, price, transaction_date, fees, notes, created_at)` — CHECK `transaction_type IN ('BUY','SELL')`. `holding_id` is `ON DELETE SET NULL` so deleting a holding preserves its transaction trail.
+- `PortfolioSnapshot(id, user_id, total_value, total_cost_basis, total_gain_loss, snapshot_date, breakdown JSONB)` — UNIQUE `(user_id, snapshot_date)` so the daily worker upserts.
+- `PortfolioAnalysis(id, user_id, health_score, analysis_data JSONB, recommendations JSONB, created_at)` — CHECK `health_score BETWEEN 0 AND 100`.
+
+### Portfolio service (`backend/services/portfolio_service.py`)
+
+Deterministic, DB-session-free math (the API hands it `(Holding, Stock)` rows):
+
+- **Live P&L enrichment** — fetches one price per distinct ticker concurrently via the Price Agent with per-ticker failure isolation (a dead ticker becomes `price_error` on that holding, never sinks the view). Per holding: `cost_basis`, `current_value`, `gain_loss`, `gain_loss_pct`, `is_delisted`.
+- **Aggregate metrics** (`compute_metrics`, pure) — total value / cost / gain-loss (%), best & worst performer, sector allocation %, market split % (PSX vs Global). Unpriced holdings are excluded from value totals but counted in `holdings_count`.
+- **Tax estimation** (plan § 4.15.5) — PSX 15% short-term / 12.5% long-term, US 22% (income proxy) short-term / 15% long-term, threshold 365 days. Only positive gains are taxed; losses are flagged as tax-loss-harvesting opportunities; short-term lots within 30 days of the long-term threshold are flagged for tax efficiency. Mixed-currency portfolios get a no-FX-conversion note.
+
+### Portfolio Analyst Agent (6th agent, `backend/agents/portfolio_analyst_agent.py`)
+
+Same two-path design as the Report Writer:
+
+- **Deterministic path** (always on, fully offline): 0-100 health score penalised for single-position concentration (>25%), sector concentration (>40%), thin diversification (vs risk-profile target), and drawdowns; surfaces strengths, weaknesses, concrete recommendations ("Consider trimming ENGRO…"), tax-loss opportunities, concentration + delisting warnings.
+- **LLM path** (preferred when `OPENROUTER_API_KEY` set): `llm_service.analyze_portfolio` synthesises the narrative; output validated/clamped, score bounded to 0-100, and the concrete tax-loss / concentration lists stay deterministic (grounded in real holdings).
+
+### REST endpoints (`backend/api/portfolio.py`, registered in `main.py`)
+
+All auth-gated + user-scoped:
+
+- `GET /api/portfolio` — enriched holdings + metrics (`?refresh=true` bypasses price cache).
+- `GET /api/portfolio/metrics` — aggregate metrics only.
+- `GET /api/portfolio/performance?range=30d|90d|1y|all` — snapshot series for the chart (422 on bad range).
+- `POST /api/portfolio/holdings` — add holding, **auto-logs a BUY transaction**; 404 unknown ticker, 422 bad quantity/price.
+- `PATCH /api/portfolio/holdings/{id}` — partial update; `DELETE /api/portfolio/holdings/{id}` — 204 / 404.
+- `POST /api/portfolio/transactions` — manual BUY/SELL; `GET /api/portfolio/transactions` — history with ticker/market filters; `GET /api/portfolio/transactions/export.csv` — CSV download.
+- `GET /api/portfolio/tax-estimate` — per-lot + total estimated CGT if sold today.
+- `POST /api/portfolio/analyze` — runs the Analyst Agent, persists a `PortfolioAnalysis` (400 when there are no active holdings); `GET /api/portfolio/analyses/latest` — most recent.
+
+### Daily snapshot worker (`backend/workers/portfolio_snapshot.py`)
+
+`run_portfolio_snapshots(db=None, *, snapshot_date=None)` — for each user with active holdings, computes value and **upserts** today's snapshot (per-user failure isolation). Callable directly from async; Celery-beat wiring is deployment glue. Verified idempotent (re-run same day updates, not duplicates).
+
+### Tests
+
+- **27 new offline tests** across `test_portfolio_service.py` (14: enrichment, metrics, build-portfolio price isolation, PSX/US tax short-vs-long-term, loss-harvest + near-threshold flags, analyst concentration/tax-loss/delisting + LLM-path) and `test_portfolio_api.py` (13: auth gating, holdings CRUD + auto-BUY, user-scoping, validation, live-P&L view, CSV export, tax endpoint, analyze persist + latest, performance range validation, snapshot-worker upsert powering the chart).
+- **Full backend suite: 287 passed, 8 deselected (live).** No regressions in the prior 260 tests.
+
+### Phase 7 — closed out (backend)
+
+- ~~Holdings + transactions schema + CRUD.~~ ✅
+- ~~Real-time P&L + portfolio-wide metrics.~~ ✅ (sector/market allocation, best/worst performer.)
+- ~~Transaction history + CSV export.~~ ✅
+- ~~Daily snapshot worker + performance series.~~ ✅
+- ~~Portfolio Analyst Agent (6th agent) + analysis persistence.~~ ✅ (LLM + deterministic.)
+- ~~Tax estimation (PSX CGT + US rules).~~ ✅
+
+**Deferred (intentional):** frontend portfolio pages/components (Recharts), live-FX conversion for mixed-currency totals, FIFO cost-basis toggle, stock-split admin tool, dividend tracking (plan v2), Celery-beat scheduling of the snapshot worker.
 
 ---
 
