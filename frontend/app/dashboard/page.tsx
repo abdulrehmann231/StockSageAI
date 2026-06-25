@@ -1,5 +1,8 @@
 "use client";
 
+import type { Route } from "next";
+import Link from "next/link";
+
 import { SearchBar } from "@/components/SearchBar";
 import { useAuth } from "@/lib/auth-context";
 
@@ -21,19 +24,22 @@ export default function DashboardPage() {
         <SearchBar />
       </section>
 
-      <section className="grid gap-4 sm:grid-cols-2">
-        <div className="rounded-lg border border-border bg-muted/30 p-5">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Recent reports
-          </h2>
-          <p className="mt-2 text-sm">No reports yet. Search a stock above.</p>
-        </div>
-        <div className="rounded-lg border border-border bg-muted/30 p-5">
-          <h2 className="text-sm font-medium text-muted-foreground">
-            Watchlist
-          </h2>
-          <p className="mt-2 text-sm">Empty — coming in Phase 6.</p>
-        </div>
+      <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          { href: "/dashboard/portfolio", title: "Portfolio", hint: "Track holdings + live P&L" },
+          { href: "/dashboard/watchlist", title: "Watchlist", hint: "Stocks you're following" },
+          { href: "/dashboard/reports", title: "Reports", hint: "AI Buy/Hold/Sell verdicts" },
+          { href: "/dashboard/alerts", title: "Alerts", hint: "Price, news & sentiment triggers" },
+        ].map((card) => (
+          <Link
+            key={card.href}
+            href={card.href as Route}
+            className="rounded-lg border border-border bg-muted/30 p-5 hover:bg-muted/50"
+          >
+            <h2 className="text-sm font-medium">{card.title}</h2>
+            <p className="mt-2 text-sm text-muted-foreground">{card.hint}</p>
+          </Link>
+        ))}
       </section>
     </div>
   );
