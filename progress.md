@@ -6,6 +6,20 @@ Legend: ✅ done · 🟡 partial / in progress · ⏳ not started
 
 ---
 
+## Frontend — feature UIs ✅ (Next.js)
+
+The Next.js app now surfaces the Phase 4 / 6 / 7 backends (previously auth + stock detail only). All pages are client components using TanStack Query against the cookie-auth API; `next build` is green (11 routes), `tsc --noEmit` clean.
+
+- **Portfolio dashboard** (`/dashboard/portfolio`) — summary stat cards (value, cost basis, gain/loss, best/worst), add/remove holdings, holdings table with live P&L, **sector-allocation pie + 90-day performance line (Recharts)**, tax-estimate card, and the "Analyze my portfolio" AI panel (health score + recommendations + concentration + tax-loss).
+- **Watchlist** (`/dashboard/watchlist`) — add/remove tickers, links to detail.
+- **Reports** (`/dashboard/reports` + `/[id]`) — generate a report, list with verdict badges, full detail (executive summary, price/news/sentiment sections, risks/opportunities, catalysts), a **chat-with-stock** panel, and a **Filings RAG ask panel** (index + grounded Q&A with citations).
+- **Alerts** (`/dashboard/alerts`) — create/list/delete price/news/sentiment alerts with per-type condition forms.
+- Header navigation across all sections; shared UI primitives (`components/ui.tsx`); verdict badge; Recharts wrappers; extended `lib/types.ts`.
+
+**Verified live end-to-end** against the running backend (real yfinance price → portfolio P&L, long-term CGT estimate, AI analysis; real SEC EDGAR filing indexed → grounded cited Q&A). Cross-site auth confirmed (`SameSite=None; Secure` cookie + credentialed CORS).
+
+---
+
 ## Phase 0 — Setup ✅
 
 Monorepo scaffolded; local dev infra runnable.
